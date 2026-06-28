@@ -1,0 +1,187 @@
+import type { DiagnosticSeverity, RuleSource } from "./types.js";
+
+export interface RuleDefinition {
+  code: string;
+  defaultSeverity: DiagnosticSeverity;
+  source: RuleSource;
+  spec?: string | undefined;
+  title: string;
+}
+
+const SITEMAP_SPEC = "https://www.sitemaps.org/protocol.html";
+const XML_SPEC = "https://www.w3.org/TR/xml/";
+const RFC3986_SPEC = "https://datatracker.ietf.org/doc/html/rfc3986";
+const GOOGLE_BUILD_SPEC = "https://developers.google.com/search/docs/crawling-indexing/sitemaps/build-sitemap";
+const GOOGLE_IMAGE_SPEC = "https://developers.google.com/search/docs/crawling-indexing/sitemaps/image-sitemaps";
+const GOOGLE_NEWS_SPEC = "https://developers.google.com/search/docs/crawling-indexing/sitemaps/news-sitemap";
+const GOOGLE_VIDEO_SPEC = "https://developers.google.com/search/docs/crawling-indexing/sitemaps/video-sitemaps";
+const GOOGLE_IMAGE_XSD_SPEC = "https://www.google.com/schemas/sitemap-image/1.1/sitemap-image.xsd";
+const GOOGLE_NEWS_XSD_SPEC = "https://www.google.com/schemas/sitemap-news/0.9/sitemap-news.xsd";
+const GOOGLE_VIDEO_XSD_SPEC = "https://www.google.com/schemas/sitemap-video/1.1/sitemap-video.xsd";
+const GOOGLE_PAGEMAP_XSD_SPEC = "https://www.google.com/schemas/sitemap-pagemap/1.0/sitemap-pagemap.xsd";
+const GOOGLE_HREFLANG_SPEC = "https://developers.google.com/search/docs/specialty/international/localized-versions";
+
+export const RULE_DEFINITIONS = {
+  SITEMAP_FILE_TOO_LARGE: rule("SITEMAP_FILE_TOO_LARGE", "error", "sitemaps.org", "Sitemap file exceeds uncompressed size limit.", SITEMAP_SPEC),
+  XML_PARSE_ERROR: rule("XML_PARSE_ERROR", "error", "xml", "XML parsing failed.", XML_SPEC),
+  XML_INVALID_UTF8: rule("XML_INVALID_UTF8", "error", "xml", "XML input is not valid UTF-8.", XML_SPEC),
+  XML_ENCODING_NOT_UTF8: rule("XML_ENCODING_NOT_UTF8", "error", "xml", "XML declaration encoding is not UTF-8.", XML_SPEC),
+  MISSING_ROOT_ELEMENT: rule("MISSING_ROOT_ELEMENT", "error", "xml", "XML root element is missing.", XML_SPEC),
+  XML_VERSION_UNSUPPORTED: rule("XML_VERSION_UNSUPPORTED", "error", "xml", "XML version is unsupported for sitemap validation.", XML_SPEC),
+  XML_DOCTYPE_NOT_ALLOWED: rule("XML_DOCTYPE_NOT_ALLOWED", "error", "xml", "DOCTYPE is not allowed for safe sitemap validation.", XML_SPEC),
+  INVALID_SITEMAP_NAMESPACE: rule("INVALID_SITEMAP_NAMESPACE", "error", "sitemaps.org", "Root sitemap namespace is invalid.", SITEMAP_SPEC),
+  INVALID_ROOT_ELEMENT: rule("INVALID_ROOT_ELEMENT", "error", "sitemaps.org", "Root element must be urlset or sitemapindex.", SITEMAP_SPEC),
+  UNEXPECTED_SITEMAP_ELEMENT: rule("UNEXPECTED_SITEMAP_ELEMENT", "error", "sitemaps.org", "Element is not allowed at this sitemap location.", SITEMAP_SPEC),
+  SITEMAP_ELEMENT_DUPLICATE: rule("SITEMAP_ELEMENT_DUPLICATE", "error", "sitemaps.org", "Sitemap protocol element appears more than once.", SITEMAP_SPEC),
+  SITEMAP_ELEMENT_OUT_OF_ORDER: rule("SITEMAP_ELEMENT_OUT_OF_ORDER", "error", "sitemaps.org", "Sitemap protocol element is out of schema order.", SITEMAP_SPEC),
+  SITEMAP_URL_LIMIT_EXCEEDED: rule("SITEMAP_URL_LIMIT_EXCEEDED", "error", "sitemaps.org", "Sitemap URL entry limit exceeded.", SITEMAP_SPEC),
+  SITEMAP_URL_ENTRY_REQUIRED: rule("SITEMAP_URL_ENTRY_REQUIRED", "error", "sitemaps.org", "URL sitemap must contain at least one url entry.", SITEMAP_SPEC),
+  SITEMAP_LOC_REQUIRED: rule("SITEMAP_LOC_REQUIRED", "error", "sitemaps.org", "URL entry is missing loc.", SITEMAP_SPEC),
+  SITEMAP_INDEX_LIMIT_EXCEEDED: rule("SITEMAP_INDEX_LIMIT_EXCEEDED", "error", "sitemaps.org", "Sitemap index entry limit exceeded.", SITEMAP_SPEC),
+  SITEMAP_INDEX_ENTRY_REQUIRED: rule("SITEMAP_INDEX_ENTRY_REQUIRED", "error", "sitemaps.org", "Sitemap index must contain at least one sitemap entry.", SITEMAP_SPEC),
+  SITEMAP_INDEX_LOC_REQUIRED: rule("SITEMAP_INDEX_LOC_REQUIRED", "error", "sitemaps.org", "Sitemap index entry is missing loc.", SITEMAP_SPEC),
+  INVALID_CHANGEFREQ: rule("INVALID_CHANGEFREQ", "error", "sitemaps.org", "changefreq has an invalid value.", SITEMAP_SPEC),
+  INVALID_PRIORITY: rule("INVALID_PRIORITY", "error", "sitemaps.org", "priority has an invalid value.", SITEMAP_SPEC),
+  INVALID_LASTMOD: rule("INVALID_LASTMOD", "error", "sitemaps.org", "lastmod is not a complete W3C date or datetime value.", SITEMAP_SPEC),
+  LOC_TOO_SHORT: rule("LOC_TOO_SHORT", "error", "sitemaps.org", "loc is shorter than the sitemap schema minimum length.", SITEMAP_SPEC),
+  LOC_TOO_LONG: rule("LOC_TOO_LONG", "error", "sitemaps.org", "loc exceeds the sitemap length limit.", SITEMAP_SPEC),
+  SITEMAP_MULTIPLE_HOSTS: rule("SITEMAP_MULTIPLE_HOSTS", "error", "sitemaps.org", "Sitemap contains locations from multiple hosts.", SITEMAP_SPEC),
+  URL_OUTSIDE_SITEMAP_HOST: rule("URL_OUTSIDE_SITEMAP_HOST", "error", "sitemaps.org", "URL is outside the sitemap host.", SITEMAP_SPEC),
+  URL_OUTSIDE_SITEMAP_PATH: rule("URL_OUTSIDE_SITEMAP_PATH", "error", "sitemaps.org", "URL is outside the sitemap path prefix.", SITEMAP_SPEC),
+  SITEMAP_ATTRIBUTE_UNEXPECTED: rule("SITEMAP_ATTRIBUTE_UNEXPECTED", "error", "sitemaps.org", "Sitemap protocol element has an unexpected attribute.", SITEMAP_SPEC),
+  SITEMAP_SET_SOURCE_LIMIT_EXCEEDED: rule("SITEMAP_SET_SOURCE_LIMIT_EXCEEDED", "error", "sitemaps.org", "Sitemap set source limit exceeded.", SITEMAP_SPEC),
+  SITEMAP_CHILD_NOT_LOADED: rule("SITEMAP_CHILD_NOT_LOADED", "warning", "sitemaps.org", "Sitemap index child source was not loaded.", SITEMAP_SPEC),
+  SITEMAP_CHILD_LOAD_FAILED: rule("SITEMAP_CHILD_LOAD_FAILED", "error", "sitemaps.org", "Sitemap index child loader failed.", SITEMAP_SPEC),
+
+  URL_CONTROL_CHARACTER: rule("URL_CONTROL_CHARACTER", "error", "rfc3986", "URL contains a control character.", RFC3986_SPEC),
+  INVALID_ABSOLUTE_URL: rule("INVALID_ABSOLUTE_URL", "error", "rfc3986", "URL is not a valid absolute URL.", RFC3986_SPEC),
+  INVALID_RFC3986_URI: rule("INVALID_RFC3986_URI", "error", "rfc3986", "URL does not satisfy RFC 3986 URI syntax.", RFC3986_SPEC),
+  INVALID_RFC3987_IRI: rule("INVALID_RFC3987_IRI", "error", "rfc3987", "URL does not satisfy RFC 3987 IRI syntax.", "https://www.rfc-editor.org/rfc/rfc3987"),
+  URI_MISSING_SCHEME: rule("URI_MISSING_SCHEME", "error", "rfc3986", "URI/IRI is missing a scheme.", RFC3986_SPEC),
+  URI_MISSING_HOST: rule("URI_MISSING_HOST", "error", "rfc3986", "URI/IRI is missing a host.", RFC3986_SPEC),
+  UNSUPPORTED_URL_SCHEME: rule("UNSUPPORTED_URL_SCHEME", "error", "sitemaps.org", "URL scheme is unsupported for sitemap entries.", SITEMAP_SPEC),
+  INVALID_PERCENT_ENCODING: rule("INVALID_PERCENT_ENCODING", "error", "rfc3986", "URL contains invalid percent encoding.", RFC3986_SPEC),
+  URL_PERCENT_ENCODED_CONTROL_CHARACTER: rule("URL_PERCENT_ENCODED_CONTROL_CHARACTER", "error", "rfc3986", "URL contains a percent-encoded control character.", RFC3986_SPEC),
+  URL_PERCENT_ENCODING_INVALID_UTF8: rule("URL_PERCENT_ENCODING_INVALID_UTF8", "error", "rfc3987", "URL percent-encoded non-ASCII bytes are not valid UTF-8.", "https://www.rfc-editor.org/rfc/rfc3987"),
+  URL_SUSPICIOUS_DOUBLE_ENCODING: rule("URL_SUSPICIOUS_DOUBLE_ENCODING", "warning", "rfc3986", "URL may be double encoded.", RFC3986_SPEC),
+  URL_UNSAFE_CHARACTER: rule("URL_UNSAFE_CHARACTER", "error", "rfc3986", "URL contains raw characters that should be percent-encoded.", RFC3986_SPEC),
+  URL_INVALID_IDN_HOSTNAME: rule("URL_INVALID_IDN_HOSTNAME", "error", "rfc3987", "URL hostname is not a valid IDN hostname.", "https://www.rfc-editor.org/rfc/rfc3987"),
+  URL_HOSTNAME_TOO_LONG: rule("URL_HOSTNAME_TOO_LONG", "error", "rfc3986", "URL hostname is too long.", RFC3986_SPEC),
+  URL_HOST_LABEL_TOO_LONG: rule("URL_HOST_LABEL_TOO_LONG", "error", "rfc3986", "URL hostname label is too long.", RFC3986_SPEC),
+  URL_IDN_NORMALIZED: rule("URL_IDN_NORMALIZED", "info", "rfc3987", "URL hostname normalizes to punycode.", "https://www.rfc-editor.org/rfc/rfc3987"),
+  URL_FRAGMENT_PRESENT: rule("URL_FRAGMENT_PRESENT", "warning", "sitemaps.org", "URL contains a fragment.", SITEMAP_SPEC),
+  URL_CREDENTIALS_PRESENT: rule("URL_CREDENTIALS_PRESENT", "warning", "rfc3986", "URL contains userinfo credentials.", RFC3986_SPEC),
+
+  GOOGLE_IGNORES_CHANGEFREQ: rule("GOOGLE_IGNORES_CHANGEFREQ", "warning", "google", "Google ignores changefreq.", GOOGLE_BUILD_SPEC),
+  GOOGLE_IGNORES_PRIORITY: rule("GOOGLE_IGNORES_PRIORITY", "warning", "google", "Google ignores priority.", GOOGLE_BUILD_SPEC),
+  EXTENSION_OUTSIDE_URL: rule("EXTENSION_OUTSIDE_URL", "error", "google", "Sitemap extension element is outside url.", GOOGLE_BUILD_SPEC),
+  GOOGLE_IMAGE_LIMIT_EXCEEDED: rule("GOOGLE_IMAGE_LIMIT_EXCEEDED", "error", "google", "Too many image entries for one URL.", GOOGLE_IMAGE_SPEC),
+  GOOGLE_IMAGE_TAG_DEPRECATED: rule("GOOGLE_IMAGE_TAG_DEPRECATED", "warning", "google", "Image sitemap tag is deprecated.", GOOGLE_IMAGE_SPEC),
+  GOOGLE_IMAGE_UNKNOWN_TAG: rule("GOOGLE_IMAGE_UNKNOWN_TAG", "warning", "google", "Unknown image sitemap tag.", GOOGLE_IMAGE_SPEC),
+  GOOGLE_IMAGE_LOC_REQUIRED: rule("GOOGLE_IMAGE_LOC_REQUIRED", "error", "google", "image:loc is required.", GOOGLE_IMAGE_SPEC),
+  GOOGLE_IMAGE_LOC_DUPLICATE: rule("GOOGLE_IMAGE_LOC_DUPLICATE", "error", "google", "image:loc appears more than once in an image entry.", GOOGLE_IMAGE_SPEC),
+  GOOGLE_IMAGE_ELEMENT_DUPLICATE: rule("GOOGLE_IMAGE_ELEMENT_DUPLICATE", "error", "google", "Image sitemap element appears more than once.", GOOGLE_IMAGE_XSD_SPEC),
+  GOOGLE_IMAGE_ELEMENT_OUT_OF_ORDER: rule("GOOGLE_IMAGE_ELEMENT_OUT_OF_ORDER", "error", "google", "Image sitemap element is out of schema order.", GOOGLE_IMAGE_XSD_SPEC),
+  GOOGLE_IMAGE_ELEMENT_PLACEMENT_INVALID: rule("GOOGLE_IMAGE_ELEMENT_PLACEMENT_INVALID", "error", "google", "Image sitemap element is not allowed at this location.", GOOGLE_IMAGE_SPEC),
+  GOOGLE_IMAGE_ATTRIBUTE_UNEXPECTED: rule("GOOGLE_IMAGE_ATTRIBUTE_UNEXPECTED", "error", "google", "Image sitemap element has an unexpected attribute.", GOOGLE_IMAGE_XSD_SPEC),
+  GOOGLE_NEWS_ENTRY_LIMIT_EXCEEDED: rule("GOOGLE_NEWS_ENTRY_LIMIT_EXCEEDED", "error", "google", "Too many news entries.", GOOGLE_NEWS_SPEC),
+  GOOGLE_NEWS_ENTRY_DUPLICATE: rule("GOOGLE_NEWS_ENTRY_DUPLICATE", "error", "google", "A URL has more than one news entry.", GOOGLE_NEWS_SPEC),
+  GOOGLE_NEWS_TAG_DEPRECATED: rule("GOOGLE_NEWS_TAG_DEPRECATED", "warning", "google", "News sitemap tag is present in the legacy XSD but not current documentation.", GOOGLE_NEWS_XSD_SPEC),
+  GOOGLE_NEWS_UNKNOWN_TAG: rule("GOOGLE_NEWS_UNKNOWN_TAG", "warning", "google", "Unknown news sitemap tag.", GOOGLE_NEWS_SPEC),
+  GOOGLE_NEWS_ELEMENT_DUPLICATE: rule("GOOGLE_NEWS_ELEMENT_DUPLICATE", "error", "google", "News sitemap element appears more than once.", GOOGLE_NEWS_SPEC),
+  GOOGLE_NEWS_ELEMENT_OUT_OF_ORDER: rule("GOOGLE_NEWS_ELEMENT_OUT_OF_ORDER", "error", "google", "News sitemap element is out of schema order.", GOOGLE_NEWS_XSD_SPEC),
+  GOOGLE_NEWS_ELEMENT_PLACEMENT_INVALID: rule("GOOGLE_NEWS_ELEMENT_PLACEMENT_INVALID", "error", "google", "News sitemap element is not allowed at this location.", GOOGLE_NEWS_SPEC),
+  GOOGLE_NEWS_ATTRIBUTE_UNEXPECTED: rule("GOOGLE_NEWS_ATTRIBUTE_UNEXPECTED", "error", "google", "News sitemap element has an unexpected attribute.", GOOGLE_NEWS_XSD_SPEC),
+  GOOGLE_NEWS_REQUIRED_FIELD: rule("GOOGLE_NEWS_REQUIRED_FIELD", "error", "google", "Required news field is missing.", GOOGLE_NEWS_SPEC),
+  GOOGLE_NEWS_PUBLICATION_DATE_INVALID: rule("GOOGLE_NEWS_PUBLICATION_DATE_INVALID", "error", "google", "News publication date is invalid.", GOOGLE_NEWS_SPEC),
+  GOOGLE_NEWS_PUBLICATION_DATE_STALE: rule("GOOGLE_NEWS_PUBLICATION_DATE_STALE", "warning", "google", "News publication date is stale.", GOOGLE_NEWS_SPEC),
+  GOOGLE_NEWS_LANGUAGE_INVALID: rule("GOOGLE_NEWS_LANGUAGE_INVALID", "error", "google", "News language value is invalid.", GOOGLE_NEWS_SPEC),
+  GOOGLE_NEWS_TITLE_TOO_LONG: rule("GOOGLE_NEWS_TITLE_TOO_LONG", "warning", "google", "News title is too long.", GOOGLE_NEWS_SPEC),
+  GOOGLE_NEWS_ACCESS_INVALID: rule("GOOGLE_NEWS_ACCESS_INVALID", "error", "google", "News access value is invalid.", GOOGLE_NEWS_XSD_SPEC),
+  GOOGLE_NEWS_GENRES_INVALID: rule("GOOGLE_NEWS_GENRES_INVALID", "error", "google", "News genres value is invalid.", GOOGLE_NEWS_XSD_SPEC),
+  GOOGLE_NEWS_STOCK_TICKERS_INVALID: rule("GOOGLE_NEWS_STOCK_TICKERS_INVALID", "error", "google", "News stock_tickers value is invalid.", GOOGLE_NEWS_XSD_SPEC),
+  GOOGLE_VIDEO_UNKNOWN_TAG: rule("GOOGLE_VIDEO_UNKNOWN_TAG", "warning", "google", "Unknown video sitemap tag.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_TAG_DEPRECATED: rule("GOOGLE_VIDEO_TAG_DEPRECATED", "warning", "google", "Video sitemap tag or attribute is deprecated.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_ELEMENT_DUPLICATE: rule("GOOGLE_VIDEO_ELEMENT_DUPLICATE", "error", "google", "Video sitemap element appears more than once.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_ELEMENT_OUT_OF_ORDER: rule("GOOGLE_VIDEO_ELEMENT_OUT_OF_ORDER", "error", "google", "Video sitemap element is out of schema order.", GOOGLE_VIDEO_XSD_SPEC),
+  GOOGLE_VIDEO_ELEMENT_PLACEMENT_INVALID: rule("GOOGLE_VIDEO_ELEMENT_PLACEMENT_INVALID", "error", "google", "Video sitemap element is not allowed at this location.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_REQUIRED_FIELD: rule("GOOGLE_VIDEO_REQUIRED_FIELD", "error", "google", "Required video field is missing.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_EXPIRATION_DATE_INVALID: rule("GOOGLE_VIDEO_EXPIRATION_DATE_INVALID", "error", "google", "Video expiration date is invalid.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_PUBLICATION_DATE_INVALID: rule("GOOGLE_VIDEO_PUBLICATION_DATE_INVALID", "error", "google", "Video publication date is invalid.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_LOCATION_REQUIRED: rule("GOOGLE_VIDEO_LOCATION_REQUIRED", "error", "google", "Video content/player location is missing.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_CONTENT_LOC_FORMAT_UNSUPPORTED: rule("GOOGLE_VIDEO_CONTENT_LOC_FORMAT_UNSUPPORTED", "error", "google", "Video content location points to an unsupported format.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_CONTENT_LOC_EQUALS_PAGE_LOC: rule("GOOGLE_VIDEO_CONTENT_LOC_EQUALS_PAGE_LOC", "error", "google", "Video content location equals page URL.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_PLAYER_LOC_EQUALS_PAGE_LOC: rule("GOOGLE_VIDEO_PLAYER_LOC_EQUALS_PAGE_LOC", "error", "google", "Video player location equals page URL.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_TITLE_TOO_LONG: rule("GOOGLE_VIDEO_TITLE_TOO_LONG", "error", "google", "Video title is too long.", GOOGLE_VIDEO_XSD_SPEC),
+  GOOGLE_VIDEO_DESCRIPTION_TOO_LONG: rule("GOOGLE_VIDEO_DESCRIPTION_TOO_LONG", "error", "google", "Video description is too long.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_CATEGORY_TOO_LONG: rule("GOOGLE_VIDEO_CATEGORY_TOO_LONG", "error", "google", "Video category is too long.", GOOGLE_VIDEO_XSD_SPEC),
+  GOOGLE_VIDEO_DURATION_INVALID: rule("GOOGLE_VIDEO_DURATION_INVALID", "error", "google", "Video duration is invalid.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_RATING_INVALID: rule("GOOGLE_VIDEO_RATING_INVALID", "error", "google", "Video rating is invalid.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_VIEW_COUNT_INVALID: rule("GOOGLE_VIDEO_VIEW_COUNT_INVALID", "error", "google", "Video view count is invalid.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_FAMILY_FRIENDLY_INVALID: rule("GOOGLE_VIDEO_FAMILY_FRIENDLY_INVALID", "error", "google", "Video family_friendly value is invalid.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_LIVE_INVALID: rule("GOOGLE_VIDEO_LIVE_INVALID", "error", "google", "Video live value is invalid.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_REQUIRES_SUBSCRIPTION_INVALID: rule("GOOGLE_VIDEO_REQUIRES_SUBSCRIPTION_INVALID", "error", "google", "Video requires_subscription value is invalid.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_RESTRICTION_COUNTRY_INVALID: rule("GOOGLE_VIDEO_RESTRICTION_COUNTRY_INVALID", "error", "google", "Video restriction country code is invalid.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_RESTRICTION_RELATIONSHIP_INVALID: rule("GOOGLE_VIDEO_RESTRICTION_RELATIONSHIP_INVALID", "error", "google", "Video restriction relationship is invalid.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_PLATFORM_VALUE_INVALID: rule("GOOGLE_VIDEO_PLATFORM_VALUE_INVALID", "error", "google", "Video platform value is invalid.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_PLATFORM_RELATIONSHIP_INVALID: rule("GOOGLE_VIDEO_PLATFORM_RELATIONSHIP_INVALID", "error", "google", "Video platform relationship is invalid.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_UPLOADER_TOO_LONG: rule("GOOGLE_VIDEO_UPLOADER_TOO_LONG", "error", "google", "Video uploader is too long.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_UPLOADER_INFO_DOMAIN_INVALID: rule("GOOGLE_VIDEO_UPLOADER_INFO_DOMAIN_INVALID", "error", "google", "Video uploader info URL is not on the parent page domain.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_TAG_LIMIT_EXCEEDED: rule("GOOGLE_VIDEO_TAG_LIMIT_EXCEEDED", "error", "google", "Too many video tags.", GOOGLE_VIDEO_SPEC),
+  GOOGLE_VIDEO_CONTENT_SEGMENT_DURATION_INVALID: rule("GOOGLE_VIDEO_CONTENT_SEGMENT_DURATION_INVALID", "error", "google", "Video content segment duration is invalid.", GOOGLE_VIDEO_XSD_SPEC),
+  GOOGLE_VIDEO_CONTENT_SEGMENT_REQUIRES_PLAYER_LOC: rule("GOOGLE_VIDEO_CONTENT_SEGMENT_REQUIRES_PLAYER_LOC", "error", "google", "Video content segment locations require player_loc.", GOOGLE_VIDEO_XSD_SPEC),
+  GOOGLE_VIDEO_ID_TYPE_INVALID: rule("GOOGLE_VIDEO_ID_TYPE_INVALID", "error", "google", "Video id type is invalid.", GOOGLE_VIDEO_XSD_SPEC),
+  GOOGLE_VIDEO_PLAYER_ALLOW_EMBED_INVALID: rule("GOOGLE_VIDEO_PLAYER_ALLOW_EMBED_INVALID", "error", "google", "Video player allow_embed value is invalid.", GOOGLE_VIDEO_XSD_SPEC),
+  GOOGLE_VIDEO_PRICE_INVALID: rule("GOOGLE_VIDEO_PRICE_INVALID", "error", "google", "Video price value or attributes are invalid.", GOOGLE_VIDEO_XSD_SPEC),
+  GOOGLE_VIDEO_ATTRIBUTE_UNEXPECTED: rule("GOOGLE_VIDEO_ATTRIBUTE_UNEXPECTED", "error", "google", "Video sitemap element has an unexpected attribute.", GOOGLE_VIDEO_XSD_SPEC),
+  GOOGLE_VIDEO_TVSHOW_NUMBER_INVALID: rule("GOOGLE_VIDEO_TVSHOW_NUMBER_INVALID", "error", "google", "Video tvshow number field is invalid.", GOOGLE_VIDEO_XSD_SPEC),
+  GOOGLE_VIDEO_TVSHOW_PREMIER_DATE_INVALID: rule("GOOGLE_VIDEO_TVSHOW_PREMIER_DATE_INVALID", "error", "google", "Video tvshow premier date is invalid.", GOOGLE_VIDEO_XSD_SPEC),
+  GOOGLE_VIDEO_TVSHOW_REQUIRED_FIELD: rule("GOOGLE_VIDEO_TVSHOW_REQUIRED_FIELD", "error", "google", "Video tvshow required field is missing.", GOOGLE_VIDEO_XSD_SPEC),
+  GOOGLE_VIDEO_TVSHOW_VIDEO_TYPE_INVALID: rule("GOOGLE_VIDEO_TVSHOW_VIDEO_TYPE_INVALID", "error", "google", "Video tvshow video_type value is invalid.", GOOGLE_VIDEO_XSD_SPEC),
+  GOOGLE_PAGEMAP_UNKNOWN_TAG: rule("GOOGLE_PAGEMAP_UNKNOWN_TAG", "warning", "google", "Unknown PageMap sitemap tag.", GOOGLE_PAGEMAP_XSD_SPEC),
+  GOOGLE_PAGEMAP_ELEMENT_DUPLICATE: rule("GOOGLE_PAGEMAP_ELEMENT_DUPLICATE", "error", "google", "PageMap sitemap element appears more than once.", GOOGLE_PAGEMAP_XSD_SPEC),
+  GOOGLE_PAGEMAP_ELEMENT_OUT_OF_ORDER: rule("GOOGLE_PAGEMAP_ELEMENT_OUT_OF_ORDER", "error", "google", "PageMap sitemap element is out of schema order.", GOOGLE_PAGEMAP_XSD_SPEC),
+  GOOGLE_PAGEMAP_ELEMENT_PLACEMENT_INVALID: rule("GOOGLE_PAGEMAP_ELEMENT_PLACEMENT_INVALID", "error", "google", "PageMap sitemap element is not allowed at this location.", GOOGLE_PAGEMAP_XSD_SPEC),
+  GOOGLE_PAGEMAP_REQUIRED_ATTRIBUTE: rule("GOOGLE_PAGEMAP_REQUIRED_ATTRIBUTE", "error", "google", "Required PageMap attribute is missing.", GOOGLE_PAGEMAP_XSD_SPEC),
+  GOOGLE_PAGEMAP_ATTRIBUTE_UNEXPECTED: rule("GOOGLE_PAGEMAP_ATTRIBUTE_UNEXPECTED", "error", "google", "PageMap sitemap element has an unexpected attribute.", GOOGLE_PAGEMAP_XSD_SPEC),
+  GOOGLE_PAGEMAP_ATTRIBUTE_VALUE_INVALID: rule("GOOGLE_PAGEMAP_ATTRIBUTE_VALUE_INVALID", "error", "google", "PageMap attribute value is invalid.", GOOGLE_PAGEMAP_XSD_SPEC),
+  GOOGLE_HREFLANG_DUPLICATE: rule("GOOGLE_HREFLANG_DUPLICATE", "error", "google", "Duplicate hreflang value.", GOOGLE_HREFLANG_SPEC),
+  GOOGLE_HREFLANG_SELF_REFERENCE_MISSING: rule("GOOGLE_HREFLANG_SELF_REFERENCE_MISSING", "error", "google", "Hreflang self reference is missing.", GOOGLE_HREFLANG_SPEC),
+  GOOGLE_HREFLANG_REL_INVALID: rule("GOOGLE_HREFLANG_REL_INVALID", "error", "google", "hreflang rel is invalid.", GOOGLE_HREFLANG_SPEC),
+  GOOGLE_HREFLANG_ELEMENT_PLACEMENT_INVALID: rule("GOOGLE_HREFLANG_ELEMENT_PLACEMENT_INVALID", "error", "google", "hreflang sitemap element is not allowed at this location.", GOOGLE_HREFLANG_SPEC),
+  GOOGLE_HREFLANG_ATTRIBUTE_UNEXPECTED: rule("GOOGLE_HREFLANG_ATTRIBUTE_UNEXPECTED", "error", "google", "hreflang sitemap element has an unexpected attribute.", GOOGLE_HREFLANG_SPEC),
+  GOOGLE_HREFLANG_REQUIRED: rule("GOOGLE_HREFLANG_REQUIRED", "error", "google", "hreflang value is missing.", GOOGLE_HREFLANG_SPEC),
+  GOOGLE_HREFLANG_INVALID: rule("GOOGLE_HREFLANG_INVALID", "error", "google", "hreflang value is invalid.", GOOGLE_HREFLANG_SPEC),
+  GOOGLE_HREFLANG_UNSUPPORTED_CODE: rule("GOOGLE_HREFLANG_UNSUPPORTED_CODE", "error", "google", "hreflang value is valid BCP 47 but unsupported by Google hreflang rules.", GOOGLE_HREFLANG_SPEC),
+  GOOGLE_HREFLANG_HREF_REQUIRED: rule("GOOGLE_HREFLANG_HREF_REQUIRED", "error", "google", "hreflang href is missing.", GOOGLE_HREFLANG_SPEC),
+  GOOGLE_HREFLANG_GRAPH_LIMIT_EXCEEDED: rule("GOOGLE_HREFLANG_GRAPH_LIMIT_EXCEEDED", "warning", "google", "Hreflang graph validation entry limit was exceeded.", GOOGLE_HREFLANG_SPEC),
+  GOOGLE_HREFLANG_ALTERNATE_URL_MISSING: rule("GOOGLE_HREFLANG_ALTERNATE_URL_MISSING", "error", "google", "Hreflang alternate URL is not present in the validated sitemap set.", GOOGLE_HREFLANG_SPEC),
+  GOOGLE_HREFLANG_RETURN_LINK_MISSING: rule("GOOGLE_HREFLANG_RETURN_LINK_MISSING", "error", "google", "Hreflang alternate URL does not return-link to the source URL.", GOOGLE_HREFLANG_SPEC),
+  GOOGLE_HREFLANG_ALTERNATE_SET_MISMATCH: rule("GOOGLE_HREFLANG_ALTERNATE_SET_MISMATCH", "error", "google", "Hreflang alternate URL set is not consistent across localized versions.", GOOGLE_HREFLANG_SPEC),
+} as const satisfies Record<string, RuleDefinition>;
+
+export type RuleCode = keyof typeof RULE_DEFINITIONS;
+
+export function getRuleDefinition(code: string): RuleDefinition | undefined {
+  return RULE_DEFINITIONS[code as RuleCode];
+}
+
+export function listRuleDefinitions(): RuleDefinition[] {
+  return Object.values(RULE_DEFINITIONS);
+}
+
+function rule(
+  code: string,
+  defaultSeverity: DiagnosticSeverity,
+  source: RuleSource,
+  title: string,
+  spec?: string,
+): RuleDefinition {
+  return {
+    code,
+    defaultSeverity,
+    source,
+    title,
+    spec,
+  };
+}

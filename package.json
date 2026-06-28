@@ -1,0 +1,110 @@
+{
+  "name": "@trybyte/sitemap-validator",
+  "version": "1.0.0",
+  "description": "Standards-focused XML sitemap validator for TypeScript, CI, and browser apps.",
+  "type": "module",
+  "private": false,
+  "license": "Apache-2.0",
+  "author": "Byte Team (trybyte.app)",
+  "homepage": "https://github.com/trybyte-app/sitemap-validator#readme",
+  "bugs": {
+    "url": "https://github.com/trybyte-app/sitemap-validator/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/trybyte-app/sitemap-validator.git"
+  },
+  "packageManager": "npm@11.10.0",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "sideEffects": [
+    "**/node-input.js"
+  ],
+  "keywords": [
+    "sitemap",
+    "sitemap-validator",
+    "sitemap-index",
+    "xml-sitemap",
+    "sitemaps",
+    "seo",
+    "technical-seo",
+    "xml",
+    "validator",
+    "google-search",
+    "ci-cd",
+    "nodejs",
+    "browser",
+    "vite",
+    "hreflang",
+    "structured-diagnostics"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "sitemap-validator": "./dist/cli.js",
+    "sitemap-validator-live": "./dist/live-cli.js"
+  },
+  "exports": {
+    ".": {
+      "browser": {
+        "types": "./dist/browser.d.ts",
+        "import": "./dist/browser.js"
+      },
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "docs/**/*.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.json",
+    "check": "npm run typecheck && npm run lint && npm test",
+    "coverage": "npm run build && node scripts/check-test-coverage.mjs",
+    "prepack": "npm run build",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint \"src/**/*.ts\"",
+    "api:snapshot": "npm run build && node scripts/check-api-snapshot.mjs --update",
+    "api:check": "npm run build && node scripts/check-api-snapshot.mjs",
+    "docs:rules": "npm run build && node scripts/generate-rule-matrix.mjs",
+    "pack:dry-run": "node scripts/pack-dry-run.mjs",
+    "verify:release": "npm run check && npm run coverage && npm run docs:rules && npm run api:check && npm run pack:dry-run",
+    "fixture:large": "node scripts/generate-large-sitemap-fixture.mjs",
+    "bench:large": "npm run build && node scripts/benchmark-large-sitemap.mjs",
+    "bench:parser": "npm run build && node scripts/benchmark-parser-candidates.mjs",
+    "bench:baseline": "npm run build && node scripts/write-benchmark-baseline.mjs",
+    "bench:check": "npm run build && node scripts/check-benchmark-baseline.mjs"
+  },
+  "dependencies": {
+    "@trybyte/robotstxt-parser": "^1.2.0",
+    "bcp-47": "^2.1.0",
+    "saxes": "^6.0.0",
+    "uri-js": "^4.4.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.15.30",
+    "@types/sax": "^1.2.7",
+    "eslint": "^10.6.0",
+    "fast-xml-parser": "^5.8.0",
+    "prettier": "^3.8.5",
+    "sax": "^1.4.1",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.62.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
