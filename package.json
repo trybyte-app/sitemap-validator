@@ -43,8 +43,8 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "sitemap-validator": "./dist/cli.js",
-    "sitemap-validator-live": "./dist/live-cli.js"
+    "sitemap-validator": "dist/cli.js",
+    "sitemap-validator-live": "dist/live-cli.js"
   },
   "exports": {
     ".": {
