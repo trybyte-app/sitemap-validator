@@ -2,6 +2,22 @@
 
 All notable changes to this package will be documented in this file.
 
+## 1.0.1 - 2026-08-28
+
+- Split Google extension validation, live URL storage, guarded live fetching,
+  and CI policy evaluation into focused internal modules without changing the
+  public library API.
+- Kept request timeouts active while reading live response bodies and applied
+  response-size limits and cleanup through one guarded fetch path.
+- Centralized saved URL handling for plain text, JSON arrays, and JSONL records
+  with source sitemap context.
+- Expanded the suite from 98 to 114 behavior-focused tests, including publish
+  gate rejection, parser and sitemap limits, loader failures, live audit errors,
+  stored finding caps, and browser dependency checks.
+- Updated the vulnerable transitive `brace-expansion` development dependency.
+- Added project terminology and documented live-fetch limits and DNS timing
+  constraints.
+
 ## 1.0.0 - 2026-06-28
 
 - Initial public release of `@trybyte/sitemap-validator`.

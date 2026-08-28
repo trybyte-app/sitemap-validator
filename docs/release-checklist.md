@@ -20,7 +20,10 @@ Use this before publishing a package version.
 
 ## Hardening Backlog
 
-- Split `src/validator.ts` extension handling into namespace-specific modules or a handler registry.
-- Split `src/live-cli.ts` into fetch policy, URL collection, audit, and report modules.
-- Reduce duplicate URL parsing and hostname conversion in the hot path.
-- Add an explicit documentation note for DNS rebinding or TOCTOU limitations in live fetch SSRF protection.
+- Pin admitted DNS addresses in the live fetch transport to close the remaining
+  DNS rebinding window.
+- Split the remaining live audit and report code if `src/live-cli.ts` keeps
+  growing.
+- Decide whether to remove `GOOGLE_NEWS_TITLE_TOO_LONG`, which is not supported
+  by the current Google News documentation or XSD but is part of the published
+  diagnostic registry.

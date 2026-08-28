@@ -273,6 +273,12 @@ reserved hosts, and it applies that check to followed redirects. Use
 `--allow-private-hosts` only when you intentionally audit a trusted staging or
 internal site.
 
+The wrapper checks DNS results before each request, but the default fetch
+transport does not pin the connection to the checked address. A hostile DNS
+server could change its answer between those two operations. Treat the live
+wrapper as an audit tool, not a network isolation boundary, when checking
+untrusted domains.
+
 Every live request has a 15-second timeout by default. The timeout stays active
 while the wrapper reads the response body. Sitemap responses are capped at 60
 MiB, page bodies at 2 MiB, robots.txt at 512 KiB, and guarded redirects at five.
