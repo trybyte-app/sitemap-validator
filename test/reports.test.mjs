@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createCiPolicyEvaluator } from "../dist/ci-policy-evaluator.js";
 import {
   assertValidForCi,
   createDiagnosticSummaryBuilder,
@@ -108,4 +109,38 @@ test("excludes allowed rules from CI warning limits and failures", async () => {
   assert.equal(evaluation.passed, true);
   assert.equal(evaluation.warnings, 0);
   assert.equal(evaluation.failingDiagnostics.length, 0);
+});
+
+test("fails CI on configured rule codes without changing their severity", async () => {
+  const result = await validateSitemap(`<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://example.com/a</loc><priority>0.5</priority></url>
+</urlset>`);
+  const evaluation = evaluateForCi(result, {
+    failOn: ["error"],
+    failOnRules: ["GOOGLE_IGNORES_PRIORITY"],
+  });
+
+  assert.equal(evaluation.passed, false);
+  assert.equal(evaluation.warnings, 1);
+  assert.deepEqual(evaluation.failingDiagnostics.map((diagnostic) => diagnostic.code), ["GOOGLE_IGNORES_PRIORITY"]);
+});
+
+test("evaluates the same CI policy from complete results and diagnostic streams", async () => {
+  const result = await validateSitemap(`<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>not-a-url</loc><priority>0.5</priority></url>
+</urlset>`);
+  const policy = {
+    failOn: ["error", "warning"],
+    allowRules: ["GOOGLE_IGNORES_PRIORITY"],
+    maxWarnings: 0,
+  };
+  const evaluator = createCiPolicyEvaluator(policy);
+
+  for (const diagnostic of result.diagnostics) {
+    evaluator.add(diagnostic);
+  }
+
+  assert.deepEqual(evaluator.evaluation(), evaluateForCi(result, policy));
 });

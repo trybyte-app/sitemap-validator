@@ -104,6 +104,14 @@ test("CLI exits 2 for usage errors", async () => {
   assert.match(result.stderr, /Usage:/);
 });
 
+test("CLI rejects remote sitemap targets without fetching them", async () => {
+  const result = await runCli(["http://127.0.0.1/sitemap.xml"]);
+
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /Remote sitemap URLs are not accepted by the publish gate/);
+  assert.match(result.stderr, /--sitemap-location/);
+});
+
 function runCli(args) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["dist/cli.js", ...args], {

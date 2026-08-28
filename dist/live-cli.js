@@ -1,11 +1,9 @@
 #!/usr/bin/env node
 import "./node-input.js";
 import { createHash } from "node:crypto";
-import { lookup } from "node:dns/promises";
 import { once } from "node:events";
 import { createReadStream, createWriteStream } from "node:fs";
-import { access, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
-import { isIP } from "node:net";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -13,6 +11,8 @@ import { finished } from "node:stream/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ParsedRobots } from "@trybyte/robotstxt-parser";
 import { evaluateForCi, resolveCiPolicy } from "./ci.js";
+import { createGuardedLiveFetcher } from "./guarded-live-fetch.js";
+import { createLiveUrlDatasetCollector, LiveUrlDatasetError, openLiveUrlDataset, } from "./live-url-dataset.js";
 import { createLocalSitemapLoader } from "./loaders.js";
 import { createDiagnosticSummaryBuilder } from "./report.js";
 import { validateSitemapSetEvents } from "./set.js";
@@ -77,7 +77,7 @@ export async function runLiveCli(argv = process.argv.slice(2), io = { stdout: pr
             return 2;
         }
         const logger = createLiveProgressLogger(args, io);
-        const report = await runLiveValidation(args, dependencies.fetch ?? fetch, dependencies.resolveHost ?? defaultResolveHost, logger);
+        const report = await runLiveValidation(args, dependencies, logger);
         const output = args.format === "json"
             ? `${JSON.stringify(formatJsonLiveReport(report, args), null, 2)}\n`
             : formatTextLiveReport(report);
@@ -91,7 +91,7 @@ export async function runLiveCli(argv = process.argv.slice(2), io = { stdout: pr
     }
     catch (error) {
         io.stderr.write(`${toErrorMessage(error)}\n`);
-        if (error instanceof LiveCliUsageError) {
+        if (error instanceof LiveCliUsageError || error instanceof LiveUrlDatasetError) {
             io.stderr.write("\n");
             writeLiveUsage(io.stderr);
             return 2;
@@ -391,18 +391,29 @@ export function parseLiveCliArgs(argv) {
     }
     return args;
 }
-async function runLiveValidation(args, fetcher, resolveHost, logger) {
+async function runLiveValidation(args, dependencies, logger) {
     const startedAt = performance.now();
+    const liveFetcher = createGuardedLiveFetcher({
+        fetch: dependencies.fetch,
+        resolveHost: dependencies.resolveHost,
+        allowPrivateHosts: args.allowPrivateHosts,
+        timeoutMs: args.timeoutMs,
+        maxRedirects: args.maxRedirects,
+        userAgent: args.userAgent,
+    });
     logger.info(`Live sitemap check started for ${args.target ?? args.urlsFile ?? "(unknown target)"}.`);
     const liveValidation = args.urlsFile
         ? {
-            urlDataset: await createUrlsFileDataset(args.urlsFile, logger),
+            urlDataset: await openLiveUrlDataset(args.urlsFile, {
+                onProgress(message) {
+                    logger.info(message);
+                },
+            }),
             xml: createSkippedXmlReport(),
-            cleanup: undefined,
         }
-        : await validateSitemapTargetAndCollectUrls(args, fetcher, resolveHost, logger);
+        : await validateSitemapTargetAndCollectUrls(args, liveFetcher, logger);
     try {
-        const audits = await runOptInAudits(liveValidation.urlDataset, args, fetcher, resolveHost, args.urlsFile ? "urls-file" : "sitemap", logger);
+        const audits = await runOptInAudits(liveValidation.urlDataset, args, liveFetcher, args.urlsFile ? "urls-file" : "sitemap", logger);
         audits.savedUrlsTo = args.saveUrls;
         audits.savedUrlDetailsTo = args.saveUrlDetails;
         const evaluation = createLiveEvaluation(liveValidation.xml.evaluation, audits, args.auditFailOn);
@@ -418,14 +429,18 @@ async function runLiveValidation(args, fetcher, resolveHost, logger) {
         };
     }
     finally {
-        await liveValidation.cleanup?.();
+        await liveValidation.urlDataset.close();
     }
 }
-async function validateSitemapTargetAndCollectUrls(args, fetcher, resolveHost, logger) {
-    const root = await resolveSitemapTarget(args, fetcher, resolveHost, logger);
+async function validateSitemapTargetAndCollectUrls(args, liveFetcher, logger) {
+    const root = await resolveSitemapTarget(args, liveFetcher, logger);
     logger.info("Root sitemap ready; validating XML and collecting sitemap URLs.");
-    const needsUrlFile = args.saveUrls !== undefined || args.saveUrlDetails !== undefined || getEnabledChecks(args).length > 0;
-    const urlDataset = needsUrlFile ? await createWritableUrlDataset(args.saveUrls, args.saveUrlDetails, getEnabledChecks(args).length > 0) : createUnsavedUrlDataset();
+    const needsReplayableUrls = getEnabledChecks(args).length > 0;
+    const urlDatasetCollector = await createLiveUrlDatasetCollector({
+        saveUrlsTo: args.saveUrls,
+        saveUrlDetailsTo: args.saveUrlDetails,
+        replayable: needsReplayableUrls,
+    });
     const diagnostics = [];
     const sourceSummaries = [];
     const diagnosticSummaryBuilder = createDiagnosticSummaryBuilder({
@@ -436,45 +451,51 @@ async function validateSitemapTargetAndCollectUrls(args, fetcher, resolveHost, l
     let collectedUrls = 0;
     let discoveredSources = 0;
     let finishedSources = 0;
-    for await (const event of validateSitemapSetEvents(root.input, {
-        sourceId: root.sourceId,
-        sitemapLocation: root.sitemapLocation,
-        gzip: root.gzip,
-        loader: root.loader,
-        loaderConcurrency: args.loaderConcurrency,
-        maxDepth: args.maxDepth,
-        maxSources: args.maxSources,
-    })) {
-        if (event.type === "sitemap:url" && event.loc) {
-            collectedUrls += 1;
-            await urlDataset.writeUrl({
-                url: event.loc,
-                sourceSitemap: event.sourceId,
-            });
-            if (shouldLogMilestone(collectedUrls, URL_COLLECTION_LOG_INTERVAL)) {
-                logger.info(`Collected ${formatCount(collectedUrls)} sitemap URLs so far.`);
+    try {
+        for await (const event of validateSitemapSetEvents(root.input, {
+            sourceId: root.sourceId,
+            sitemapLocation: root.sitemapLocation,
+            gzip: root.gzip,
+            loader: root.loader,
+            loaderConcurrency: args.loaderConcurrency,
+            maxDepth: args.maxDepth,
+            maxSources: args.maxSources,
+        })) {
+            if (event.type === "sitemap:url" && event.loc) {
+                collectedUrls += 1;
+                await urlDatasetCollector.add({
+                    url: event.loc,
+                    sourceSitemap: event.sourceId,
+                });
+                if (shouldLogMilestone(collectedUrls, URL_COLLECTION_LOG_INTERVAL)) {
+                    logger.info(`Collected ${formatCount(collectedUrls)} sitemap URLs so far.`);
+                }
+            }
+            if (event.type === "diagnostic") {
+                diagnostics.push(event.diagnostic);
+                diagnosticSummaryBuilder.add(event.diagnostic);
+            }
+            if (event.type === "source:discover") {
+                discoveredSources += 1;
+                if (shouldLogEarlyOrInterval(discoveredSources, SOURCE_LOG_INTERVAL)) {
+                    logger.info(`Discovered child sitemap ${formatCount(discoveredSources)}: ${event.loc}`);
+                }
+            }
+            if (event.type === "source:finish") {
+                finishedSources += 1;
+                sourceSummaries.push(event.summary);
+                if (shouldLogEarlyOrInterval(finishedSources, SOURCE_LOG_INTERVAL)) {
+                    logger.info(`Validated ${formatCount(finishedSources)} sitemap source${finishedSources === 1 ? "" : "s"}; collected ${formatCount(collectedUrls)} URLs.`);
+                }
+            }
+            if (event.type === "set:summary") {
+                summary = event.summary;
             }
         }
-        if (event.type === "diagnostic") {
-            diagnostics.push(event.diagnostic);
-            diagnosticSummaryBuilder.add(event.diagnostic);
-        }
-        if (event.type === "source:discover") {
-            discoveredSources += 1;
-            if (shouldLogEarlyOrInterval(discoveredSources, SOURCE_LOG_INTERVAL)) {
-                logger.info(`Discovered child sitemap ${formatCount(discoveredSources)}: ${event.loc}`);
-            }
-        }
-        if (event.type === "source:finish") {
-            finishedSources += 1;
-            sourceSummaries.push(event.summary);
-            if (shouldLogEarlyOrInterval(finishedSources, SOURCE_LOG_INTERVAL)) {
-                logger.info(`Validated ${formatCount(finishedSources)} sitemap source${finishedSources === 1 ? "" : "s"}; collected ${formatCount(collectedUrls)} URLs.`);
-            }
-        }
-        if (event.type === "set:summary") {
-            summary = event.summary;
-        }
+    }
+    catch (error) {
+        await urlDatasetCollector.close();
+        throw error;
     }
     const setSummary = summary ?? createFallbackSummary(sourceSummaries, diagnostics);
     const result = {
@@ -484,7 +505,7 @@ async function validateSitemapTargetAndCollectUrls(args, fetcher, resolveHost, l
         summary: setSummary,
     };
     const xmlPolicy = createXmlPolicy(args);
-    const finalizedDataset = await urlDataset.finish();
+    const finalizedDataset = await urlDatasetCollector.finish();
     logger.info(`XML validation finished: ${formatCount(setSummary.sources)} sitemap source${setSummary.sources === 1 ? "" : "s"}, ${formatCount(setSummary.urls)} URLs, ${setSummary.diagnostics.errors} errors, ${setSummary.diagnostics.warnings} warnings.`);
     if (args.saveUrls) {
         logger.info(`Saved sitemap URLs to ${args.saveUrls}.`);
@@ -493,8 +514,7 @@ async function validateSitemapTargetAndCollectUrls(args, fetcher, resolveHost, l
         logger.info(`Saved sitemap URL details to ${args.saveUrlDetails}.`);
     }
     return {
-        urlDataset: finalizedDataset.dataset,
-        cleanup: finalizedDataset.cleanup,
+        urlDataset: finalizedDataset,
         xml: {
             validationSkipped: false,
             summary: setSummary,
@@ -505,20 +525,20 @@ async function validateSitemapTargetAndCollectUrls(args, fetcher, resolveHost, l
         },
     };
 }
-async function resolveSitemapTarget(args, fetcher, resolveHost, logger) {
+async function resolveSitemapTarget(args, liveFetcher, logger) {
     const target = args.target;
     if (!target) {
         throw new LiveCliUsageError("Missing sitemap target.");
     }
     if (isHttpUrl(target)) {
         logger.info(`Fetching root sitemap: ${target}`);
-        const source = await fetchSitemapSource(target, args, fetcher, resolveHost);
+        const source = await fetchSitemapSource(target, args, liveFetcher);
         return {
             input: source.input,
             sourceId: source.sourceId ?? target,
             sitemapLocation: source.sitemapLocation,
             gzip: source.gzip,
-            loader: createLiveSitemapLoader(args, fetcher, resolveHost),
+            loader: createLiveSitemapLoader(args, liveFetcher),
         };
     }
     logger.info(`Reading root sitemap file: ${target}`);
@@ -552,29 +572,30 @@ async function resolveLocalChildLoader(args) {
         localDirectory: directory,
     });
 }
-function createLiveSitemapLoader(args, fetcher, resolveHost) {
-    return async ({ loc }) => fetchSitemapSource(loc, args, fetcher, resolveHost);
+function createLiveSitemapLoader(args, liveFetcher) {
+    return async ({ loc }) => fetchSitemapSource(loc, args, liveFetcher);
 }
-async function fetchSitemapSource(url, args, fetcher, resolveHost) {
-    const { response, finalUrl } = await fetchLive(fetcher, url, {
+async function fetchSitemapSource(url, args, liveFetcher) {
+    const result = await liveFetcher.fetch(url, {
         method: "GET",
         headers: {
-            "user-agent": args.userAgent,
             "accept": "application/xml,text/xml,*/*",
         },
-    }, args, resolveHost, { followRedirects: true });
-    if (!response.ok) {
-        throw new Error(`Failed to fetch sitemap ${finalUrl}: HTTP ${response.status}`);
+        followRedirects: true,
+        maxBytes: args.maxSitemapBytes,
+    });
+    if (!result.ok) {
+        throw new Error(`Failed to fetch sitemap ${result.finalUrl}: HTTP ${result.status}`);
     }
-    const bytes = await readResponseBytes(response, args.maxSitemapBytes);
+    const bytes = result.bytes ?? new Uint8Array();
     return {
         input: bytes,
-        sourceId: finalUrl,
-        sitemapLocation: finalUrl,
-        gzip: shouldTreatAsGzip(finalUrl, response),
+        sourceId: result.finalUrl,
+        sitemapLocation: result.finalUrl,
+        gzip: shouldTreatAsGzip(result.finalUrl, result.headers),
     };
 }
-async function runOptInAudits(urlDataset, args, fetcher, resolveHost, urlSource, logger) {
+async function runOptInAudits(urlDataset, args, liveFetcher, urlSource, logger) {
     const enabledChecks = getEnabledChecks(args);
     const accumulator = new AuditFindingAccumulator(args.maxAuditFindings);
     let uniqueUrls;
@@ -584,7 +605,7 @@ async function runOptInAudits(urlDataset, args, fetcher, resolveHost, urlSource,
         return createLiveAuditReport(urlDataset, enabledChecks, uniqueUrls, auditedUrls, args, urlSource, accumulator);
     }
     logger.info(`Live URL audits started: ${enabledChecks.join(", ")}.`);
-    if (!urlDataset.path && !urlDataset.recordsPath) {
+    if (!urlDataset.replayable) {
         accumulator.add({
             code: "LIVE_URL_DATASET_UNAVAILABLE",
             severity: "error",
@@ -619,12 +640,12 @@ async function runOptInAudits(urlDataset, args, fetcher, resolveHost, urlSource,
         logger.info(`Page-level audits will stream all ${formatCount(auditedUrls)} URL entries.`);
     }
     if (args.checkRobots) {
-        const records = selectedUrls ? urlRecordsFromArray(selectedUrls.records) : iterateUrlRecords(urlDataset);
-        await auditRobots(records, args, fetcher, resolveHost, accumulator, logger);
+        const records = selectedUrls ? urlRecordsFromArray(selectedUrls.records) : urlDataset.records();
+        await auditRobots(records, args, liveFetcher, accumulator, logger);
     }
     if (args.checkStatus || args.checkCanonical || args.checkNoindex || args.requireCanonical) {
-        const records = selectedUrls ? urlRecordsFromArray(selectedUrls.records) : iterateUrlRecords(urlDataset);
-        await auditPageUrls(records, args, fetcher, resolveHost, accumulator, logger);
+        const records = selectedUrls ? urlRecordsFromArray(selectedUrls.records) : urlDataset.records();
+        await auditPageUrls(records, args, liveFetcher, accumulator, logger);
     }
     logger.info(`Live URL audits finished: ${accumulator.counts.errors} errors, ${accumulator.counts.warnings} warnings.`);
     return createLiveAuditReport(urlDataset, enabledChecks, uniqueUrls, auditedUrls, args, urlSource, accumulator);
@@ -673,7 +694,7 @@ class AuditFindingAccumulator {
     }
 }
 async function auditDuplicateUrls(urlDataset, accumulator, logger) {
-    if (!urlDataset.path && !urlDataset.recordsPath) {
+    if (!urlDataset.replayable) {
         return undefined;
     }
     logger.info("Duplicate URL audit started.");
@@ -681,7 +702,7 @@ async function auditDuplicateUrls(urlDataset, accumulator, logger) {
     const writers = new Map();
     let processedUrls = 0;
     try {
-        for await (const record of iterateUrlRecords(urlDataset)) {
+        for await (const record of urlDataset.records()) {
             processedUrls += 1;
             const key = normalizeUrlKey(record.url);
             const shard = duplicateShardForKey(key);
@@ -752,7 +773,7 @@ async function collectAuditUrlSample(urlDataset, maxAuditUrls) {
     const records = [];
     const seen = new Set();
     let limitReached = false;
-    for await (const record of iterateUrlRecords(urlDataset)) {
+    for await (const record of urlDataset.records()) {
         const key = normalizeUrlKey(record.url);
         if (seen.has(key)) {
             continue;
@@ -792,104 +813,6 @@ async function closeWriters(writers) {
 function duplicateShardForKey(key) {
     return createHash("sha256").update(key).digest()[0] ?? 0;
 }
-async function createUrlsFileDataset(path, logger) {
-    logger.info(`Reading saved URL list: ${path}`);
-    const recordsPath = await isJsonLinesRecordFile(path) ? path : undefined;
-    return {
-        path: recordsPath ? undefined : path,
-        recordsPath,
-        totalUrls: recordsPath ? await countUrlRecordsFile(recordsPath, logger) : await countUrlsFile(path, logger),
-    };
-}
-function createUnsavedUrlDataset() {
-    let totalUrls = 0;
-    return {
-        async writeUrl() {
-            totalUrls += 1;
-        },
-        async finish() {
-            return {
-                dataset: {
-                    path: undefined,
-                    recordsPath: undefined,
-                    totalUrls,
-                },
-                cleanup: undefined,
-            };
-        },
-    };
-}
-async function createWritableUrlDataset(savePath, saveRecordPath, needsRecords) {
-    const temporaryDirectory = !savePath || (needsRecords && !saveRecordPath)
-        ? await mkdtemp(join(tmpdir(), "sitemap-live-urls-"))
-        : undefined;
-    const path = savePath ?? (needsRecords ? undefined : join(temporaryDirectory ?? tmpdir(), "urls.txt"));
-    const recordsPath = saveRecordPath ?? (needsRecords ? join(temporaryDirectory ?? tmpdir(), "url-details.jsonl") : undefined);
-    const writer = path ? createWriteStream(path, { flags: "w" }) : undefined;
-    const recordWriter = recordsPath ? createWriteStream(recordsPath, { flags: "w" }) : undefined;
-    let totalUrls = 0;
-    return {
-        async writeUrl(record) {
-            totalUrls += 1;
-            if (writer) {
-                await writeStreamLine(writer, `${record.url}\n`);
-            }
-            if (recordWriter) {
-                await writeStreamLine(recordWriter, `${serializeUrlRecord(record)}\n`);
-            }
-        },
-        async finish() {
-            if (writer) {
-                writer.end();
-                await finished(writer);
-            }
-            if (recordWriter) {
-                recordWriter.end();
-                await finished(recordWriter);
-            }
-            return {
-                dataset: {
-                    path,
-                    recordsPath,
-                    totalUrls,
-                },
-                cleanup: temporaryDirectory
-                    ? async () => {
-                        await rm(temporaryDirectory, { recursive: true, force: true });
-                    }
-                    : undefined,
-            };
-        },
-    };
-}
-function serializeUrlRecord(record) {
-    const payload = {
-        url: record.url,
-    };
-    if (record.sourceSitemap) {
-        payload.sourceSitemap = record.sourceSitemap;
-    }
-    return JSON.stringify(payload);
-}
-function parseUrlRecordJson(line) {
-    let parsed;
-    try {
-        parsed = JSON.parse(line);
-    }
-    catch {
-        throw new LiveCliUsageError("--urls-file JSONL records must contain one JSON object per line.");
-    }
-    if (!isObjectRecord(parsed) || typeof parsed.url !== "string") {
-        throw new LiveCliUsageError("--urls-file JSONL records must include a string url field.");
-    }
-    if ("sourceSitemap" in parsed && parsed.sourceSitemap !== undefined && typeof parsed.sourceSitemap !== "string") {
-        throw new LiveCliUsageError("--urls-file JSONL sourceSitemap fields must be strings when present.");
-    }
-    return {
-        url: parsed.url,
-        sourceSitemap: typeof parsed.sourceSitemap === "string" ? parsed.sourceSitemap : undefined,
-    };
-}
 function parseDuplicateShardRecord(line) {
     const parsed = JSON.parse(line);
     if (!isObjectRecord(parsed) || typeof parsed.key !== "string" || typeof parsed.url !== "string") {
@@ -918,66 +841,6 @@ function urlRecordContext(record) {
 function isObjectRecord(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-async function countUrlsFile(path, logger) {
-    let count = 0;
-    for await (const _url of iterateUrlsFile(path)) {
-        count += 1;
-        if (shouldLogMilestone(count, URL_COLLECTION_LOG_INTERVAL)) {
-            logger.info(`Read ${formatCount(count)} URLs from saved URL list.`);
-        }
-    }
-    logger.info(`Saved URL list ready: ${formatCount(count)} URL entries.`);
-    return count;
-}
-async function countUrlRecordsFile(path, logger) {
-    let count = 0;
-    for await (const _record of iterateUrlRecordsFile(path)) {
-        count += 1;
-        if (shouldLogMilestone(count, URL_COLLECTION_LOG_INTERVAL)) {
-            logger.info(`Read ${formatCount(count)} URL detail records.`);
-        }
-    }
-    logger.info(`URL detail file ready: ${formatCount(count)} URL records.`);
-    return count;
-}
-async function* iterateUrlRecords(dataset) {
-    if (dataset.recordsPath) {
-        yield* iterateUrlRecordsFile(dataset.recordsPath);
-        return;
-    }
-    if (!dataset.path) {
-        return;
-    }
-    for await (const url of iterateUrlsFile(dataset.path)) {
-        yield {
-            url,
-            sourceSitemap: undefined,
-        };
-    }
-}
-async function* iterateUrlRecordsFile(path) {
-    for await (const line of iterateLines(path)) {
-        const trimmed = line.trim();
-        if (trimmed.length === 0 || trimmed.startsWith("#")) {
-            continue;
-        }
-        yield parseUrlRecordJson(trimmed);
-    }
-}
-async function* iterateUrlsFile(path) {
-    if (await isJsonArrayFile(path)) {
-        for (const url of await readJsonUrlsFile(path)) {
-            yield url;
-        }
-        return;
-    }
-    for await (const line of iterateLines(path)) {
-        const url = line.trim();
-        if (url.length > 0 && !url.startsWith("#")) {
-            yield url;
-        }
-    }
-}
 async function* iterateLines(path, options = {}) {
     const input = createReadStream(path, { encoding: "utf8" });
     const lines = createInterface({
@@ -995,36 +858,7 @@ async function* iterateLines(path, options = {}) {
         }
     }
 }
-async function isJsonArrayFile(path) {
-    const handle = await open(path, "r");
-    try {
-        const buffer = Buffer.alloc(128);
-        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-        return buffer.subarray(0, bytesRead).toString("utf8").trimStart().startsWith("[");
-    }
-    finally {
-        await handle.close();
-    }
-}
-async function isJsonLinesRecordFile(path) {
-    const handle = await open(path, "r");
-    try {
-        const buffer = Buffer.alloc(128);
-        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-        return buffer.subarray(0, bytesRead).toString("utf8").trimStart().startsWith("{");
-    }
-    finally {
-        await handle.close();
-    }
-}
-async function readJsonUrlsFile(path) {
-    const parsed = JSON.parse(await readFile(path, "utf8"));
-    if (!Array.isArray(parsed) || !parsed.every((value) => typeof value === "string")) {
-        throw new LiveCliUsageError("--urls-file JSON must be an array of URL strings.");
-    }
-    return parsed;
-}
-async function auditRobots(records, args, fetcher, resolveHost, accumulator, logger) {
+async function auditRobots(records, args, liveFetcher, accumulator, logger) {
     const robotsCache = new Map();
     let checkedUrls = 0;
     logger.info("Robots.txt audit started.");
@@ -1037,7 +871,7 @@ async function auditRobots(records, args, fetcher, resolveHost, accumulator, log
             accumulator.add(invalidAuditUrlFinding(record));
             continue;
         }
-        const parsedRobots = await getRobotsForOrigin(parsed.origin, args, fetcher, resolveHost, accumulator);
+        const parsedRobots = await getRobotsForOrigin(parsed.origin, args, liveFetcher, accumulator);
         if (!parsedRobots) {
             continue;
         }
@@ -1061,27 +895,28 @@ async function auditRobots(records, args, fetcher, resolveHost, accumulator, log
         }
     }
     logger.info(`Robots.txt audit finished: ${formatCount(checkedUrls)} URLs checked.`);
-    async function getRobotsForOrigin(origin, liveArgs, liveFetcher, liveResolveHost, liveAccumulator) {
+    async function getRobotsForOrigin(origin, liveArgs, guardedFetcher, liveAccumulator) {
         const cached = robotsCache.get(origin);
         if (cached) {
             return cached;
         }
-        const promise = fetchRobotsForOrigin(origin, liveArgs, liveFetcher, liveResolveHost, liveAccumulator);
+        const promise = fetchRobotsForOrigin(origin, liveArgs, guardedFetcher, liveAccumulator);
         robotsCache.set(origin, promise);
         return promise;
     }
 }
-async function fetchRobotsForOrigin(origin, args, fetcher, resolveHost, accumulator) {
+async function fetchRobotsForOrigin(origin, args, liveFetcher, accumulator) {
     const robotsUrl = `${origin}/robots.txt`;
     let fetchResult;
     try {
-        fetchResult = await fetchLive(fetcher, robotsUrl, {
+        fetchResult = await liveFetcher.fetch(robotsUrl, {
             method: "GET",
             headers: {
-                "user-agent": args.userAgent,
                 "accept": "text/plain,*/*",
             },
-        }, args, resolveHost, { followRedirects: true });
+            followRedirects: true,
+            maxBytes: args.maxRobotsBytes,
+        });
     }
     catch (error) {
         accumulator.add({
@@ -1095,27 +930,27 @@ async function fetchRobotsForOrigin(origin, args, fetcher, resolveHost, accumula
         });
         return null;
     }
-    const { response, finalUrl } = fetchResult;
-    if (response.status === 404) {
+    const { status, ok, finalUrl } = fetchResult;
+    if (status === 404) {
         return null;
     }
-    if (!response.ok) {
+    if (!ok) {
         accumulator.add({
             code: "LIVE_ROBOTS_UNAVAILABLE",
             severity: "warning",
-            message: `robots.txt for ${origin} returned HTTP ${response.status}.`,
+            message: `robots.txt for ${origin} returned HTTP ${status}.`,
             context: {
                 robotsUrl,
                 finalUrl,
-                status: response.status,
+                status,
             },
         });
         return null;
     }
-    const robotsTxt = new TextDecoder().decode(await readResponseBytes(response, args.maxRobotsBytes));
+    const robotsTxt = new TextDecoder().decode(fetchResult.bytes ?? new Uint8Array());
     return ParsedRobots.parse(robotsTxt);
 }
-async function auditPageUrls(records, args, fetcher, resolveHost, accumulator, logger) {
+async function auditPageUrls(records, args, liveFetcher, accumulator, logger) {
     let chunk = [];
     const chunkSize = Math.max(args.auditConcurrency * 4, 1);
     let checkedUrls = 0;
@@ -1123,7 +958,7 @@ async function auditPageUrls(records, args, fetcher, resolveHost, accumulator, l
     for await (const record of records) {
         chunk.push(record);
         if (chunk.length >= chunkSize) {
-            accumulator.addMany((await auditPageUrlChunk(chunk, args, fetcher, resolveHost)).flat());
+            accumulator.addMany((await auditPageUrlChunk(chunk, args, liveFetcher)).flat());
             const previousCheckedUrls = checkedUrls;
             checkedUrls += chunk.length;
             logAuditUrlProgress(logger, "Page URL audit", checkedUrls, previousCheckedUrls);
@@ -1131,51 +966,50 @@ async function auditPageUrls(records, args, fetcher, resolveHost, accumulator, l
         }
     }
     if (chunk.length > 0) {
-        accumulator.addMany((await auditPageUrlChunk(chunk, args, fetcher, resolveHost)).flat());
+        accumulator.addMany((await auditPageUrlChunk(chunk, args, liveFetcher)).flat());
         const previousCheckedUrls = checkedUrls;
         checkedUrls += chunk.length;
         logAuditUrlProgress(logger, "Page URL audit", checkedUrls, previousCheckedUrls);
     }
     logger.info(`Page URL audit finished: ${formatCount(checkedUrls)} URLs checked.`);
 }
-async function auditPageUrlChunk(records, args, fetcher, resolveHost) {
-    return mapConcurrent(records, args.auditConcurrency, async (record) => auditPageUrl(record, args, fetcher, resolveHost));
+async function auditPageUrlChunk(records, args, liveFetcher) {
+    return mapConcurrent(records, args.auditConcurrency, async (record) => auditPageUrl(record, args, liveFetcher));
 }
-async function auditPageUrl(record, args, fetcher, resolveHost) {
+async function auditPageUrl(record, args, liveFetcher) {
     const findings = [];
     const url = record.url;
     if (!parseUrl(url)) {
         return [invalidAuditUrlFinding(record)];
     }
     if (args.checkStatus) {
-        findings.push(...await auditStatus(record, args, fetcher, resolveHost));
+        findings.push(...await auditStatus(record, args, liveFetcher));
     }
     if (args.checkCanonical || args.requireCanonical || args.checkNoindex) {
-        findings.push(...await auditPageBody(record, args, fetcher, resolveHost));
+        findings.push(...await auditPageBody(record, args, liveFetcher));
     }
     return findings;
 }
-async function auditStatus(record, args, fetcher, resolveHost) {
+async function auditStatus(record, args, liveFetcher) {
     let fetchResult;
     const url = record.url;
     try {
-        fetchResult = await fetchLive(fetcher, url, {
+        fetchResult = await liveFetcher.fetch(url, {
             method: args.statusMethod === "head" ? "HEAD" : "GET",
             headers: {
-                "user-agent": args.userAgent,
                 "accept": "*/*",
             },
-        }, args, resolveHost, { followRedirects: false });
-        if (args.statusMethod === "head" && (fetchResult.response.status === 405 || fetchResult.response.status === 501)) {
-            fetchResult = await fetchLive(fetcher, url, {
+            followRedirects: false,
+        });
+        if (args.statusMethod === "head" && (fetchResult.status === 405 || fetchResult.status === 501)) {
+            fetchResult = await liveFetcher.fetch(url, {
                 method: "GET",
                 headers: {
-                    "user-agent": args.userAgent,
                     "accept": "*/*",
                 },
-            }, args, resolveHost, { followRedirects: false });
+                followRedirects: false,
+            });
         }
-        await fetchResult.response.body?.cancel();
     }
     catch (error) {
         return [{
@@ -1189,33 +1023,34 @@ async function auditStatus(record, args, fetcher, resolveHost) {
                 },
             }];
     }
-    const { response } = fetchResult;
-    if (response.status >= 200 && response.status < 300) {
+    const { status, headers } = fetchResult;
+    if (status >= 200 && status < 300) {
         return [];
     }
     return [{
-            code: response.status >= 300 && response.status < 400 ? "LIVE_STATUS_REDIRECT" : "LIVE_STATUS_BAD",
+            code: status >= 300 && status < 400 ? "LIVE_STATUS_REDIRECT" : "LIVE_STATUS_BAD",
             severity: "error",
-            message: `URL returned HTTP ${response.status}.`,
+            message: `URL returned HTTP ${status}.`,
             url,
             context: {
                 ...urlRecordContext(record),
-                status: response.status,
-                location: response.headers.get("location") ?? undefined,
+                status,
+                location: headers.get("location") ?? undefined,
             },
         }];
 }
-async function auditPageBody(record, args, fetcher, resolveHost) {
+async function auditPageBody(record, args, liveFetcher) {
     let fetchResult;
     const url = record.url;
     try {
-        fetchResult = await fetchLive(fetcher, url, {
+        fetchResult = await liveFetcher.fetch(url, {
             method: "GET",
             headers: {
-                "user-agent": args.userAgent,
                 "accept": "text/html,application/xhtml+xml,*/*",
             },
-        }, args, resolveHost, { followRedirects: true });
+            followRedirects: true,
+            maxBytes: args.maxPageBytes,
+        });
     }
     catch (error) {
         return [{
@@ -1229,30 +1064,28 @@ async function auditPageBody(record, args, fetcher, resolveHost) {
                 },
             }];
     }
-    const { response, finalUrl, redirects } = fetchResult;
-    if (!response.ok) {
-        await response.body?.cancel();
+    const { status, ok, headers, bytes, finalUrl, redirects } = fetchResult;
+    if (!ok) {
         return [{
                 code: "LIVE_PAGE_STATUS_BAD",
                 severity: "error",
-                message: `URL returned HTTP ${response.status}; page metadata audit was skipped.`,
+                message: `URL returned HTTP ${status}; page metadata audit was skipped.`,
                 url,
                 context: {
                     ...urlRecordContext(record),
-                    status: response.status,
+                    status,
                     finalUrl,
                     redirects,
                 },
             }];
     }
-    const bytes = await readResponseBytes(response, args.maxPageBytes);
-    const html = new TextDecoder().decode(bytes);
+    const html = new TextDecoder().decode(bytes ?? new Uint8Array());
     const findings = [];
     if (args.checkCanonical || args.requireCanonical) {
-        findings.push(...auditCanonical(record, response.headers, html, args.requireCanonical, finalUrl, redirects));
+        findings.push(...auditCanonical(record, headers, html, args.requireCanonical, finalUrl, redirects));
     }
     if (args.checkNoindex) {
-        findings.push(...auditNoindex(record, response.headers, html, finalUrl, redirects));
+        findings.push(...auditNoindex(record, headers, html, finalUrl, redirects));
     }
     return findings;
 }
@@ -1385,207 +1218,12 @@ function parseTagAttributes(tag) {
     }
     return attrs;
 }
-async function fetchLive(fetcher, rawUrl, init, args, resolveHost, options) {
-    let currentUrl = parseHttpUrlForFetch(rawUrl);
-    const redirects = [];
-    while (true) {
-        await assertLiveFetchAllowed(currentUrl, args, resolveHost);
-        const response = await fetchWithTimeout(fetcher, currentUrl.href, {
-            ...init,
-            redirect: "manual",
-        }, args.timeoutMs);
-        if (!options.followRedirects || !isRedirectStatus(response.status)) {
-            return {
-                response,
-                finalUrl: currentUrl.href,
-                redirects,
-            };
-        }
-        const location = response.headers.get("location");
-        if (!location) {
-            return {
-                response,
-                finalUrl: currentUrl.href,
-                redirects,
-            };
-        }
-        await response.body?.cancel();
-        if (redirects.length >= args.maxRedirects) {
-            throw new Error(`Fetch exceeded ${args.maxRedirects} redirects while loading ${rawUrl}.`);
-        }
-        currentUrl = parseHttpUrlForFetch(new URL(location, currentUrl).href);
-        redirects.push(currentUrl.href);
-    }
-}
-function parseHttpUrlForFetch(rawUrl) {
-    let parsed;
-    try {
-        parsed = new URL(rawUrl);
-    }
-    catch {
-        throw new Error(`Live fetch URL is not valid: ${rawUrl}`);
-    }
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        throw new Error(`Live fetch URL must use http:// or https://: ${rawUrl}`);
-    }
-    if (!parsed.hostname) {
-        throw new Error(`Live fetch URL must include a hostname: ${rawUrl}`);
-    }
-    return parsed;
-}
-async function assertLiveFetchAllowed(url, args, resolveHost) {
-    if (args.allowPrivateHosts) {
-        return;
-    }
-    const hostname = stripIpv6Brackets(url.hostname);
-    if (isLocalHostname(hostname)) {
-        throw new Error(`Refusing to fetch local hostname ${url.hostname}. Pass --allow-private-hosts only when you trust the target.`);
-    }
-    if (isIP(hostname)) {
-        assertPublicIp(hostname, url.href);
-        return;
-    }
-    const records = await resolveHost(hostname);
-    if (records.length === 0) {
-        throw new Error(`Hostname ${hostname} did not resolve.`);
-    }
-    for (const record of records) {
-        assertPublicIp(record.address, url.href);
-    }
-}
-async function defaultResolveHost(hostname) {
-    return lookup(hostname, { all: true, verbatim: true });
-}
-function assertPublicIp(address, url) {
-    if (isNonPublicIp(address)) {
-        throw new Error(`Refusing to fetch ${url} because ${address} is private, local, reserved, or non-public. Pass --allow-private-hosts only when you trust the target.`);
-    }
-}
-function stripIpv6Brackets(hostname) {
-    return hostname.startsWith("[") && hostname.endsWith("]")
-        ? hostname.slice(1, -1)
-        : hostname;
-}
-function isLocalHostname(hostname) {
-    const normalized = hostname.toLowerCase();
-    return normalized === "localhost" || normalized.endsWith(".localhost");
-}
-function isNonPublicIp(address) {
-    const normalized = normalizeIpAddress(address);
-    const version = isIP(normalized);
-    if (version === 4) {
-        return isNonPublicIpv4(normalized);
-    }
-    if (version === 6) {
-        return isNonPublicIpv6(normalized);
-    }
-    return true;
-}
-function normalizeIpAddress(address) {
-    const withoutBrackets = stripIpv6Brackets(address.toLowerCase());
-    const zoneIndex = withoutBrackets.indexOf("%");
-    return zoneIndex >= 0 ? withoutBrackets.slice(0, zoneIndex) : withoutBrackets;
-}
-function isNonPublicIpv4(address) {
-    const octets = address.split(".").map((part) => Number(part));
-    const [first, second, third] = octets;
-    if (first === undefined
-        || second === undefined
-        || third === undefined
-        || octets.length !== 4
-        || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-        return true;
-    }
-    return first === 0
-        || first === 10
-        || first === 127
-        || first >= 224
-        || (first === 100 && second >= 64 && second <= 127)
-        || (first === 169 && second === 254)
-        || (first === 172 && second >= 16 && second <= 31)
-        || (first === 192 && second === 168)
-        || (first === 192 && second === 0 && third === 0)
-        || (first === 192 && second === 0 && third === 2)
-        || (first === 198 && (second === 18 || second === 19))
-        || (first === 198 && second === 51 && third === 100)
-        || (first === 203 && second === 0 && third === 113);
-}
-function isNonPublicIpv6(address) {
-    if (address.startsWith("::ffff:")) {
-        return isNonPublicIp(address.slice("::ffff:".length));
-    }
-    return address === "::"
-        || address === "::1"
-        || address.startsWith("fc")
-        || address.startsWith("fd")
-        || address.startsWith("fe8")
-        || address.startsWith("fe9")
-        || address.startsWith("fea")
-        || address.startsWith("feb")
-        || address.startsWith("ff")
-        || address.startsWith("2001:db8");
-}
-function isRedirectStatus(status) {
-    return status === 301
-        || status === 302
-        || status === 303
-        || status === 307
-        || status === 308;
-}
-async function fetchWithTimeout(fetcher, url, init, timeoutMs) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => {
-        controller.abort();
-    }, timeoutMs);
-    try {
-        return await fetcher(url, {
-            ...init,
-            signal: controller.signal,
-        });
-    }
-    finally {
-        clearTimeout(timeout);
-    }
-}
-async function readResponseBytes(response, maxBytes) {
-    const reader = response.body?.getReader();
-    if (!reader) {
-        const bytes = new Uint8Array(await response.arrayBuffer());
-        if (bytes.byteLength > maxBytes) {
-            throw new Error(`Response exceeded ${maxBytes} bytes.`);
-        }
-        return bytes;
-    }
-    const chunks = [];
-    let total = 0;
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-            break;
-        }
-        if (value) {
-            total += value.byteLength;
-            if (total > maxBytes) {
-                await reader.cancel();
-                throw new Error(`Response exceeded ${maxBytes} bytes.`);
-            }
-            chunks.push(value);
-        }
-    }
-    const output = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-        output.set(chunk, offset);
-        offset += chunk.byteLength;
-    }
-    return output;
-}
-function shouldTreatAsGzip(url, response) {
-    const encoding = response.headers.get("content-encoding")?.toLowerCase();
+function shouldTreatAsGzip(url, headers) {
+    const encoding = headers.get("content-encoding")?.toLowerCase();
     if (encoding?.includes("gzip")) {
         return false;
     }
-    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    const contentType = headers.get("content-type")?.toLowerCase() ?? "";
     return new URL(url).pathname.endsWith(".gz") || contentType.includes("gzip");
 }
 function createXmlPolicy(args) {

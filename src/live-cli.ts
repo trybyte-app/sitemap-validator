@@ -1,11 +1,9 @@
 #!/usr/bin/env node
 import "./node-input.js";
 import { createHash } from "node:crypto";
-import { lookup } from "node:dns/promises";
 import { once } from "node:events";
 import { createReadStream, createWriteStream } from "node:fs";
-import { access, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
-import { isIP } from "node:net";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -13,10 +11,26 @@ import { finished } from "node:stream/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ParsedRobots } from "@trybyte/robotstxt-parser";
 import { evaluateForCi, resolveCiPolicy } from "./ci.js";
+import { createGuardedLiveFetcher } from "./guarded-live-fetch.js";
+import {
+  createLiveUrlDatasetCollector,
+  LiveUrlDatasetError,
+  openLiveUrlDataset,
+} from "./live-url-dataset.js";
 import { createLocalSitemapLoader } from "./loaders.js";
 import { createDiagnosticSummaryBuilder } from "./report.js";
 import { validateSitemapSetEvents } from "./set.js";
 import type { CiEvaluation, CiPolicy, CiPolicyPreset } from "./ci.js";
+import type {
+  GuardedLiveFetcher,
+  GuardedLiveFetchResult as FetchResult,
+  LiveFetchAdapter,
+  ResolveHostAdapter,
+} from "./guarded-live-fetch.js";
+import type {
+  LiveUrlDataset as UrlDataset,
+  LiveUrlRecord as UrlRecord,
+} from "./live-url-dataset.js";
 import type { DiagnosticSummary, ReportDetailLevel } from "./report.js";
 import type {
   DiagnosticSeverity,
@@ -78,8 +92,6 @@ type OutputFormat = "text" | "json";
 type AuditSeverity = "error" | "warning" | "info";
 type AuditFailOn = "none" | "error" | "warning";
 type StatusMethod = "head" | "get";
-type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
-type ResolveHostLike = (hostname: string) => Promise<readonly { address: string; family: number }[]>;
 
 interface WritableLike {
   write(chunk: string): unknown;
@@ -91,8 +103,8 @@ interface CliIo {
 }
 
 interface LiveCliDependencies {
-  fetch?: FetchLike | undefined;
-  resolveHost?: ResolveHostLike | undefined;
+  fetch?: LiveFetchAdapter | undefined;
+  resolveHost?: ResolveHostAdapter | undefined;
 }
 
 interface LiveProgressLogger {
@@ -200,7 +212,6 @@ interface LiveCliReport {
 interface LiveValidationResult {
   urlDataset: UrlDataset;
   xml: LiveXmlReport;
-  cleanup: (() => Promise<void>) | undefined;
 }
 
 interface ResolvedSitemapTarget {
@@ -211,36 +222,10 @@ interface ResolvedSitemapTarget {
   loader: SitemapLoader | undefined;
 }
 
-interface UrlDataset {
-  path: string | undefined;
-  recordsPath: string | undefined;
-  totalUrls: number;
-}
-
-interface WritableUrlDataset {
-  writeUrl(record: UrlRecord): Promise<void>;
-  finish(): Promise<{ dataset: UrlDataset; cleanup: (() => Promise<void>) | undefined }>;
-}
-
-interface UrlRecord {
-  url: string;
-  sourceSitemap: string | undefined;
-}
-
 interface DuplicateShardRecord {
   key: string;
   url: string;
   sourceSitemap: string | undefined;
-}
-
-interface FetchResult {
-  response: Response;
-  finalUrl: string;
-  redirects: string[];
-}
-
-interface LiveFetchOptions {
-  followRedirects: boolean;
 }
 
 class LiveCliUsageError extends Error {
@@ -269,7 +254,7 @@ export async function runLiveCli(
     }
 
     const logger = createLiveProgressLogger(args, io);
-    const report = await runLiveValidation(args, dependencies.fetch ?? fetch, dependencies.resolveHost ?? defaultResolveHost, logger);
+    const report = await runLiveValidation(args, dependencies, logger);
     const output = args.format === "json"
       ? `${JSON.stringify(formatJsonLiveReport(report, args), null, 2)}\n`
       : formatTextLiveReport(report);
@@ -284,7 +269,7 @@ export async function runLiveCli(
   } catch (error) {
     io.stderr.write(`${toErrorMessage(error)}\n`);
 
-    if (error instanceof LiveCliUsageError) {
+    if (error instanceof LiveCliUsageError || error instanceof LiveUrlDatasetError) {
       io.stderr.write("\n");
       writeLiveUsage(io.stderr);
       return 2;
@@ -600,22 +585,32 @@ export function parseLiveCliArgs(argv: readonly string[]): LiveCliArgs {
 
 async function runLiveValidation(
   args: LiveCliArgs,
-  fetcher: FetchLike,
-  resolveHost: ResolveHostLike,
+  dependencies: LiveCliDependencies,
   logger: LiveProgressLogger,
 ): Promise<LiveCliReport> {
   const startedAt = performance.now();
+  const liveFetcher = createGuardedLiveFetcher({
+    fetch: dependencies.fetch,
+    resolveHost: dependencies.resolveHost,
+    allowPrivateHosts: args.allowPrivateHosts,
+    timeoutMs: args.timeoutMs,
+    maxRedirects: args.maxRedirects,
+    userAgent: args.userAgent,
+  });
   logger.info(`Live sitemap check started for ${args.target ?? args.urlsFile ?? "(unknown target)"}.`);
   const liveValidation = args.urlsFile
     ? {
-        urlDataset: await createUrlsFileDataset(args.urlsFile, logger),
+        urlDataset: await openLiveUrlDataset(args.urlsFile, {
+          onProgress(message) {
+            logger.info(message);
+          },
+        }),
         xml: createSkippedXmlReport(),
-        cleanup: undefined,
       }
-    : await validateSitemapTargetAndCollectUrls(args, fetcher, resolveHost, logger);
+    : await validateSitemapTargetAndCollectUrls(args, liveFetcher, logger);
 
   try {
-    const audits = await runOptInAudits(liveValidation.urlDataset, args, fetcher, resolveHost, args.urlsFile ? "urls-file" : "sitemap", logger);
+    const audits = await runOptInAudits(liveValidation.urlDataset, args, liveFetcher, args.urlsFile ? "urls-file" : "sitemap", logger);
     audits.savedUrlsTo = args.saveUrls;
     audits.savedUrlDetailsTo = args.saveUrlDetails;
     const evaluation = createLiveEvaluation(liveValidation.xml.evaluation, audits, args.auditFailOn);
@@ -631,20 +626,23 @@ async function runLiveValidation(
       evaluation,
     };
   } finally {
-    await liveValidation.cleanup?.();
+    await liveValidation.urlDataset.close();
   }
 }
 
 async function validateSitemapTargetAndCollectUrls(
   args: LiveCliArgs,
-  fetcher: FetchLike,
-  resolveHost: ResolveHostLike,
+  liveFetcher: GuardedLiveFetcher,
   logger: LiveProgressLogger,
 ): Promise<LiveValidationResult> {
-  const root = await resolveSitemapTarget(args, fetcher, resolveHost, logger);
+  const root = await resolveSitemapTarget(args, liveFetcher, logger);
   logger.info("Root sitemap ready; validating XML and collecting sitemap URLs.");
-  const needsUrlFile = args.saveUrls !== undefined || args.saveUrlDetails !== undefined || getEnabledChecks(args).length > 0;
-  const urlDataset = needsUrlFile ? await createWritableUrlDataset(args.saveUrls, args.saveUrlDetails, getEnabledChecks(args).length > 0) : createUnsavedUrlDataset();
+  const needsReplayableUrls = getEnabledChecks(args).length > 0;
+  const urlDatasetCollector = await createLiveUrlDatasetCollector({
+    saveUrlsTo: args.saveUrls,
+    saveUrlDetailsTo: args.saveUrlDetails,
+    replayable: needsReplayableUrls,
+  });
   const diagnostics: SitemapDiagnostic[] = [];
   const sourceSummaries: ValidationSummary[] = [];
   const diagnosticSummaryBuilder = createDiagnosticSummaryBuilder({
@@ -656,52 +654,57 @@ async function validateSitemapTargetAndCollectUrls(
   let discoveredSources = 0;
   let finishedSources = 0;
 
-  for await (const event of validateSitemapSetEvents(root.input, {
-    sourceId: root.sourceId,
-    sitemapLocation: root.sitemapLocation,
-    gzip: root.gzip,
-    loader: root.loader,
-    loaderConcurrency: args.loaderConcurrency,
-    maxDepth: args.maxDepth,
-    maxSources: args.maxSources,
-  })) {
-    if (event.type === "sitemap:url" && event.loc) {
-      collectedUrls += 1;
-      await urlDataset.writeUrl({
-        url: event.loc,
-        sourceSitemap: event.sourceId,
-      });
+  try {
+    for await (const event of validateSitemapSetEvents(root.input, {
+      sourceId: root.sourceId,
+      sitemapLocation: root.sitemapLocation,
+      gzip: root.gzip,
+      loader: root.loader,
+      loaderConcurrency: args.loaderConcurrency,
+      maxDepth: args.maxDepth,
+      maxSources: args.maxSources,
+    })) {
+      if (event.type === "sitemap:url" && event.loc) {
+        collectedUrls += 1;
+        await urlDatasetCollector.add({
+          url: event.loc,
+          sourceSitemap: event.sourceId,
+        });
 
-      if (shouldLogMilestone(collectedUrls, URL_COLLECTION_LOG_INTERVAL)) {
-        logger.info(`Collected ${formatCount(collectedUrls)} sitemap URLs so far.`);
+        if (shouldLogMilestone(collectedUrls, URL_COLLECTION_LOG_INTERVAL)) {
+          logger.info(`Collected ${formatCount(collectedUrls)} sitemap URLs so far.`);
+        }
+      }
+
+      if (event.type === "diagnostic") {
+        diagnostics.push(event.diagnostic);
+        diagnosticSummaryBuilder.add(event.diagnostic);
+      }
+
+      if (event.type === "source:discover") {
+        discoveredSources += 1;
+
+        if (shouldLogEarlyOrInterval(discoveredSources, SOURCE_LOG_INTERVAL)) {
+          logger.info(`Discovered child sitemap ${formatCount(discoveredSources)}: ${event.loc}`);
+        }
+      }
+
+      if (event.type === "source:finish") {
+        finishedSources += 1;
+        sourceSummaries.push(event.summary);
+
+        if (shouldLogEarlyOrInterval(finishedSources, SOURCE_LOG_INTERVAL)) {
+          logger.info(`Validated ${formatCount(finishedSources)} sitemap source${finishedSources === 1 ? "" : "s"}; collected ${formatCount(collectedUrls)} URLs.`);
+        }
+      }
+
+      if (event.type === "set:summary") {
+        summary = event.summary;
       }
     }
-
-    if (event.type === "diagnostic") {
-      diagnostics.push(event.diagnostic);
-      diagnosticSummaryBuilder.add(event.diagnostic);
-    }
-
-    if (event.type === "source:discover") {
-      discoveredSources += 1;
-
-      if (shouldLogEarlyOrInterval(discoveredSources, SOURCE_LOG_INTERVAL)) {
-        logger.info(`Discovered child sitemap ${formatCount(discoveredSources)}: ${event.loc}`);
-      }
-    }
-
-    if (event.type === "source:finish") {
-      finishedSources += 1;
-      sourceSummaries.push(event.summary);
-
-      if (shouldLogEarlyOrInterval(finishedSources, SOURCE_LOG_INTERVAL)) {
-        logger.info(`Validated ${formatCount(finishedSources)} sitemap source${finishedSources === 1 ? "" : "s"}; collected ${formatCount(collectedUrls)} URLs.`);
-      }
-    }
-
-    if (event.type === "set:summary") {
-      summary = event.summary;
-    }
+  } catch (error) {
+    await urlDatasetCollector.close();
+    throw error;
   }
 
   const setSummary = summary ?? createFallbackSummary(sourceSummaries, diagnostics);
@@ -713,7 +716,7 @@ async function validateSitemapTargetAndCollectUrls(
   };
   const xmlPolicy = createXmlPolicy(args);
 
-  const finalizedDataset = await urlDataset.finish();
+  const finalizedDataset = await urlDatasetCollector.finish();
 
   logger.info(`XML validation finished: ${formatCount(setSummary.sources)} sitemap source${setSummary.sources === 1 ? "" : "s"}, ${formatCount(setSummary.urls)} URLs, ${setSummary.diagnostics.errors} errors, ${setSummary.diagnostics.warnings} warnings.`);
 
@@ -726,8 +729,7 @@ async function validateSitemapTargetAndCollectUrls(
   }
 
   return {
-    urlDataset: finalizedDataset.dataset,
-    cleanup: finalizedDataset.cleanup,
+    urlDataset: finalizedDataset,
     xml: {
       validationSkipped: false,
       summary: setSummary,
@@ -741,8 +743,7 @@ async function validateSitemapTargetAndCollectUrls(
 
 async function resolveSitemapTarget(
   args: LiveCliArgs,
-  fetcher: FetchLike,
-  resolveHost: ResolveHostLike,
+  liveFetcher: GuardedLiveFetcher,
   logger: LiveProgressLogger,
 ): Promise<ResolvedSitemapTarget> {
   const target = args.target;
@@ -753,14 +754,14 @@ async function resolveSitemapTarget(
 
   if (isHttpUrl(target)) {
     logger.info(`Fetching root sitemap: ${target}`);
-    const source = await fetchSitemapSource(target, args, fetcher, resolveHost);
+    const source = await fetchSitemapSource(target, args, liveFetcher);
 
     return {
       input: source.input,
       sourceId: source.sourceId ?? target,
       sitemapLocation: source.sitemapLocation,
       gzip: source.gzip,
-      loader: createLiveSitemapLoader(args, fetcher, resolveHost),
+      loader: createLiveSitemapLoader(args, liveFetcher),
     };
   }
 
@@ -801,43 +802,42 @@ async function resolveLocalChildLoader(args: LiveCliArgs): Promise<SitemapLoader
   });
 }
 
-function createLiveSitemapLoader(args: LiveCliArgs, fetcher: FetchLike, resolveHost: ResolveHostLike): SitemapLoader {
-  return async ({ loc }): Promise<SitemapLoadedSource> => fetchSitemapSource(loc, args, fetcher, resolveHost);
+function createLiveSitemapLoader(args: LiveCliArgs, liveFetcher: GuardedLiveFetcher): SitemapLoader {
+  return async ({ loc }): Promise<SitemapLoadedSource> => fetchSitemapSource(loc, args, liveFetcher);
 }
 
 async function fetchSitemapSource(
   url: string,
   args: LiveCliArgs,
-  fetcher: FetchLike,
-  resolveHost: ResolveHostLike,
+  liveFetcher: GuardedLiveFetcher,
 ): Promise<SitemapLoadedSource> {
-  const { response, finalUrl } = await fetchLive(fetcher, url, {
+  const result = await liveFetcher.fetch(url, {
     method: "GET",
     headers: {
-      "user-agent": args.userAgent,
       "accept": "application/xml,text/xml,*/*",
     },
-  }, args, resolveHost, { followRedirects: true });
+    followRedirects: true,
+    maxBytes: args.maxSitemapBytes,
+  });
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch sitemap ${finalUrl}: HTTP ${response.status}`);
+  if (!result.ok) {
+    throw new Error(`Failed to fetch sitemap ${result.finalUrl}: HTTP ${result.status}`);
   }
 
-  const bytes = await readResponseBytes(response, args.maxSitemapBytes);
+  const bytes = result.bytes ?? new Uint8Array();
 
   return {
     input: bytes,
-    sourceId: finalUrl,
-    sitemapLocation: finalUrl,
-    gzip: shouldTreatAsGzip(finalUrl, response),
+    sourceId: result.finalUrl,
+    sitemapLocation: result.finalUrl,
+    gzip: shouldTreatAsGzip(result.finalUrl, result.headers),
   };
 }
 
 async function runOptInAudits(
   urlDataset: UrlDataset,
   args: LiveCliArgs,
-  fetcher: FetchLike,
-  resolveHost: ResolveHostLike,
+  liveFetcher: GuardedLiveFetcher,
   urlSource: "sitemap" | "urls-file",
   logger: LiveProgressLogger,
 ): Promise<LiveAuditReport> {
@@ -853,7 +853,7 @@ async function runOptInAudits(
 
   logger.info(`Live URL audits started: ${enabledChecks.join(", ")}.`);
 
-  if (!urlDataset.path && !urlDataset.recordsPath) {
+  if (!urlDataset.replayable) {
     accumulator.add({
       code: "LIVE_URL_DATASET_UNAVAILABLE",
       severity: "error",
@@ -893,13 +893,13 @@ async function runOptInAudits(
   }
 
   if (args.checkRobots) {
-    const records = selectedUrls ? urlRecordsFromArray(selectedUrls.records) : iterateUrlRecords(urlDataset);
-    await auditRobots(records, args, fetcher, resolveHost, accumulator, logger);
+    const records = selectedUrls ? urlRecordsFromArray(selectedUrls.records) : urlDataset.records();
+    await auditRobots(records, args, liveFetcher, accumulator, logger);
   }
 
   if (args.checkStatus || args.checkCanonical || args.checkNoindex || args.requireCanonical) {
-    const records = selectedUrls ? urlRecordsFromArray(selectedUrls.records) : iterateUrlRecords(urlDataset);
-    await auditPageUrls(records, args, fetcher, resolveHost, accumulator, logger);
+    const records = selectedUrls ? urlRecordsFromArray(selectedUrls.records) : urlDataset.records();
+    await auditPageUrls(records, args, liveFetcher, accumulator, logger);
   }
 
   logger.info(`Live URL audits finished: ${accumulator.counts.errors} errors, ${accumulator.counts.warnings} warnings.`);
@@ -962,7 +962,7 @@ async function auditDuplicateUrls(
   accumulator: AuditFindingAccumulator,
   logger: LiveProgressLogger,
 ): Promise<number | undefined> {
-  if (!urlDataset.path && !urlDataset.recordsPath) {
+  if (!urlDataset.replayable) {
     return undefined;
   }
 
@@ -972,7 +972,7 @@ async function auditDuplicateUrls(
   let processedUrls = 0;
 
   try {
-    for await (const record of iterateUrlRecords(urlDataset)) {
+    for await (const record of urlDataset.records()) {
       processedUrls += 1;
       const key = normalizeUrlKey(record.url);
       const shard = duplicateShardForKey(key);
@@ -1053,7 +1053,7 @@ async function collectAuditUrlSample(urlDataset: UrlDataset, maxAuditUrls: numbe
   const seen = new Set<string>();
   let limitReached = false;
 
-  for await (const record of iterateUrlRecords(urlDataset)) {
+  for await (const record of urlDataset.records()) {
     const key = normalizeUrlKey(record.url);
 
     if (seen.has(key)) {
@@ -1103,125 +1103,6 @@ function duplicateShardForKey(key: string): number {
   return createHash("sha256").update(key).digest()[0] ?? 0;
 }
 
-async function createUrlsFileDataset(path: string, logger: LiveProgressLogger): Promise<UrlDataset> {
-  logger.info(`Reading saved URL list: ${path}`);
-  const recordsPath = await isJsonLinesRecordFile(path) ? path : undefined;
-
-  return {
-    path: recordsPath ? undefined : path,
-    recordsPath,
-    totalUrls: recordsPath ? await countUrlRecordsFile(recordsPath, logger) : await countUrlsFile(path, logger),
-  };
-}
-
-function createUnsavedUrlDataset(): WritableUrlDataset {
-  let totalUrls = 0;
-
-  return {
-    async writeUrl() {
-      totalUrls += 1;
-    },
-    async finish() {
-      return {
-        dataset: {
-          path: undefined,
-          recordsPath: undefined,
-          totalUrls,
-        },
-        cleanup: undefined,
-      };
-    },
-  };
-}
-
-async function createWritableUrlDataset(
-  savePath: string | undefined,
-  saveRecordPath: string | undefined,
-  needsRecords: boolean,
-): Promise<WritableUrlDataset> {
-  const temporaryDirectory = !savePath || (needsRecords && !saveRecordPath)
-    ? await mkdtemp(join(tmpdir(), "sitemap-live-urls-"))
-    : undefined;
-  const path = savePath ?? (needsRecords ? undefined : join(temporaryDirectory ?? tmpdir(), "urls.txt"));
-  const recordsPath = saveRecordPath ?? (needsRecords ? join(temporaryDirectory ?? tmpdir(), "url-details.jsonl") : undefined);
-  const writer = path ? createWriteStream(path, { flags: "w" }) : undefined;
-  const recordWriter = recordsPath ? createWriteStream(recordsPath, { flags: "w" }) : undefined;
-  let totalUrls = 0;
-
-  return {
-    async writeUrl(record) {
-      totalUrls += 1;
-
-      if (writer) {
-        await writeStreamLine(writer, `${record.url}\n`);
-      }
-
-      if (recordWriter) {
-        await writeStreamLine(recordWriter, `${serializeUrlRecord(record)}\n`);
-      }
-    },
-    async finish() {
-      if (writer) {
-        writer.end();
-        await finished(writer);
-      }
-
-      if (recordWriter) {
-        recordWriter.end();
-        await finished(recordWriter);
-      }
-
-      return {
-        dataset: {
-          path,
-          recordsPath,
-          totalUrls,
-        },
-        cleanup: temporaryDirectory
-          ? async () => {
-              await rm(temporaryDirectory, { recursive: true, force: true });
-            }
-          : undefined,
-      };
-    },
-  };
-}
-
-function serializeUrlRecord(record: UrlRecord): string {
-  const payload: { url: string; sourceSitemap?: string } = {
-    url: record.url,
-  };
-
-  if (record.sourceSitemap) {
-    payload.sourceSitemap = record.sourceSitemap;
-  }
-
-  return JSON.stringify(payload);
-}
-
-function parseUrlRecordJson(line: string): UrlRecord {
-  let parsed: unknown;
-
-  try {
-    parsed = JSON.parse(line);
-  } catch {
-    throw new LiveCliUsageError("--urls-file JSONL records must contain one JSON object per line.");
-  }
-
-  if (!isObjectRecord(parsed) || typeof parsed.url !== "string") {
-    throw new LiveCliUsageError("--urls-file JSONL records must include a string url field.");
-  }
-
-  if ("sourceSitemap" in parsed && parsed.sourceSitemap !== undefined && typeof parsed.sourceSitemap !== "string") {
-    throw new LiveCliUsageError("--urls-file JSONL sourceSitemap fields must be strings when present.");
-  }
-
-  return {
-    url: parsed.url,
-    sourceSitemap: typeof parsed.sourceSitemap === "string" ? parsed.sourceSitemap : undefined,
-  };
-}
-
 function parseDuplicateShardRecord(line: string): DuplicateShardRecord {
   const parsed = JSON.parse(line) as unknown;
 
@@ -1258,84 +1139,6 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-async function countUrlsFile(path: string, logger: LiveProgressLogger): Promise<number> {
-  let count = 0;
-
-  for await (const _url of iterateUrlsFile(path)) {
-    count += 1;
-
-    if (shouldLogMilestone(count, URL_COLLECTION_LOG_INTERVAL)) {
-      logger.info(`Read ${formatCount(count)} URLs from saved URL list.`);
-    }
-  }
-
-  logger.info(`Saved URL list ready: ${formatCount(count)} URL entries.`);
-  return count;
-}
-
-async function countUrlRecordsFile(path: string, logger: LiveProgressLogger): Promise<number> {
-  let count = 0;
-
-  for await (const _record of iterateUrlRecordsFile(path)) {
-    count += 1;
-
-    if (shouldLogMilestone(count, URL_COLLECTION_LOG_INTERVAL)) {
-      logger.info(`Read ${formatCount(count)} URL detail records.`);
-    }
-  }
-
-  logger.info(`URL detail file ready: ${formatCount(count)} URL records.`);
-  return count;
-}
-
-async function* iterateUrlRecords(dataset: UrlDataset): AsyncGenerator<UrlRecord, void, void> {
-  if (dataset.recordsPath) {
-    yield* iterateUrlRecordsFile(dataset.recordsPath);
-    return;
-  }
-
-  if (!dataset.path) {
-    return;
-  }
-
-  for await (const url of iterateUrlsFile(dataset.path)) {
-    yield {
-      url,
-      sourceSitemap: undefined,
-    };
-  }
-}
-
-async function* iterateUrlRecordsFile(path: string): AsyncGenerator<UrlRecord, void, void> {
-  for await (const line of iterateLines(path)) {
-    const trimmed = line.trim();
-
-    if (trimmed.length === 0 || trimmed.startsWith("#")) {
-      continue;
-    }
-
-    yield parseUrlRecordJson(trimmed);
-  }
-}
-
-async function* iterateUrlsFile(path: string): AsyncGenerator<string, void, void> {
-  if (await isJsonArrayFile(path)) {
-    for (const url of await readJsonUrlsFile(path)) {
-      yield url;
-    }
-
-    return;
-  }
-
-  for await (const line of iterateLines(path)) {
-    const url = line.trim();
-
-    if (url.length > 0 && !url.startsWith("#")) {
-      yield url;
-    }
-  }
-}
-
 async function* iterateLines(path: string, options: { missingOk?: boolean } = {}): AsyncGenerator<string, void, void> {
   const input = createReadStream(path, { encoding: "utf8" });
   const lines = createInterface({
@@ -1354,45 +1157,10 @@ async function* iterateLines(path: string, options: { missingOk?: boolean } = {}
   }
 }
 
-async function isJsonArrayFile(path: string): Promise<boolean> {
-  const handle = await open(path, "r");
-
-  try {
-    const buffer = Buffer.alloc(128);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    return buffer.subarray(0, bytesRead).toString("utf8").trimStart().startsWith("[");
-  } finally {
-    await handle.close();
-  }
-}
-
-async function isJsonLinesRecordFile(path: string): Promise<boolean> {
-  const handle = await open(path, "r");
-
-  try {
-    const buffer = Buffer.alloc(128);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    return buffer.subarray(0, bytesRead).toString("utf8").trimStart().startsWith("{");
-  } finally {
-    await handle.close();
-  }
-}
-
-async function readJsonUrlsFile(path: string): Promise<string[]> {
-  const parsed = JSON.parse(await readFile(path, "utf8")) as unknown;
-
-  if (!Array.isArray(parsed) || !parsed.every((value) => typeof value === "string")) {
-    throw new LiveCliUsageError("--urls-file JSON must be an array of URL strings.");
-  }
-
-  return parsed;
-}
-
 async function auditRobots(
   records: AsyncIterable<UrlRecord>,
   args: LiveCliArgs,
-  fetcher: FetchLike,
-  resolveHost: ResolveHostLike,
+  liveFetcher: GuardedLiveFetcher,
   accumulator: AuditFindingAccumulator,
   logger: LiveProgressLogger,
 ): Promise<void> {
@@ -1411,7 +1179,7 @@ async function auditRobots(
       continue;
     }
 
-    const parsedRobots = await getRobotsForOrigin(parsed.origin, args, fetcher, resolveHost, accumulator);
+    const parsedRobots = await getRobotsForOrigin(parsed.origin, args, liveFetcher, accumulator);
 
     if (!parsedRobots) {
       continue;
@@ -1443,8 +1211,7 @@ async function auditRobots(
   async function getRobotsForOrigin(
     origin: string,
     liveArgs: LiveCliArgs,
-    liveFetcher: FetchLike,
-    liveResolveHost: ResolveHostLike,
+    guardedFetcher: GuardedLiveFetcher,
     liveAccumulator: AuditFindingAccumulator,
   ): Promise<ParsedRobots | null> {
     const cached = robotsCache.get(origin);
@@ -1453,7 +1220,7 @@ async function auditRobots(
       return cached;
     }
 
-    const promise = fetchRobotsForOrigin(origin, liveArgs, liveFetcher, liveResolveHost, liveAccumulator);
+    const promise = fetchRobotsForOrigin(origin, liveArgs, guardedFetcher, liveAccumulator);
     robotsCache.set(origin, promise);
     return promise;
   }
@@ -1462,21 +1229,21 @@ async function auditRobots(
 async function fetchRobotsForOrigin(
   origin: string,
   args: LiveCliArgs,
-  fetcher: FetchLike,
-  resolveHost: ResolveHostLike,
+  liveFetcher: GuardedLiveFetcher,
   accumulator: AuditFindingAccumulator,
 ): Promise<ParsedRobots | null> {
   const robotsUrl = `${origin}/robots.txt`;
   let fetchResult: FetchResult;
 
   try {
-    fetchResult = await fetchLive(fetcher, robotsUrl, {
+    fetchResult = await liveFetcher.fetch(robotsUrl, {
       method: "GET",
       headers: {
-        "user-agent": args.userAgent,
         "accept": "text/plain,*/*",
       },
-    }, args, resolveHost, { followRedirects: true });
+      followRedirects: true,
+      maxBytes: args.maxRobotsBytes,
+    });
   } catch (error) {
     accumulator.add({
       code: "LIVE_ROBOTS_UNREACHABLE",
@@ -1490,35 +1257,34 @@ async function fetchRobotsForOrigin(
     return null;
   }
 
-  const { response, finalUrl } = fetchResult;
+  const { status, ok, finalUrl } = fetchResult;
 
-  if (response.status === 404) {
+  if (status === 404) {
     return null;
   }
 
-  if (!response.ok) {
+  if (!ok) {
     accumulator.add({
       code: "LIVE_ROBOTS_UNAVAILABLE",
       severity: "warning",
-      message: `robots.txt for ${origin} returned HTTP ${response.status}.`,
+      message: `robots.txt for ${origin} returned HTTP ${status}.`,
       context: {
         robotsUrl,
         finalUrl,
-        status: response.status,
+        status,
       },
     });
     return null;
   }
 
-  const robotsTxt = new TextDecoder().decode(await readResponseBytes(response, args.maxRobotsBytes));
+  const robotsTxt = new TextDecoder().decode(fetchResult.bytes ?? new Uint8Array());
   return ParsedRobots.parse(robotsTxt);
 }
 
 async function auditPageUrls(
   records: AsyncIterable<UrlRecord>,
   args: LiveCliArgs,
-  fetcher: FetchLike,
-  resolveHost: ResolveHostLike,
+  liveFetcher: GuardedLiveFetcher,
   accumulator: AuditFindingAccumulator,
   logger: LiveProgressLogger,
 ): Promise<void> {
@@ -1531,7 +1297,7 @@ async function auditPageUrls(
     chunk.push(record);
 
     if (chunk.length >= chunkSize) {
-      accumulator.addMany((await auditPageUrlChunk(chunk, args, fetcher, resolveHost)).flat());
+      accumulator.addMany((await auditPageUrlChunk(chunk, args, liveFetcher)).flat());
       const previousCheckedUrls = checkedUrls;
       checkedUrls += chunk.length;
       logAuditUrlProgress(logger, "Page URL audit", checkedUrls, previousCheckedUrls);
@@ -1540,7 +1306,7 @@ async function auditPageUrls(
   }
 
   if (chunk.length > 0) {
-    accumulator.addMany((await auditPageUrlChunk(chunk, args, fetcher, resolveHost)).flat());
+    accumulator.addMany((await auditPageUrlChunk(chunk, args, liveFetcher)).flat());
     const previousCheckedUrls = checkedUrls;
     checkedUrls += chunk.length;
     logAuditUrlProgress(logger, "Page URL audit", checkedUrls, previousCheckedUrls);
@@ -1552,17 +1318,15 @@ async function auditPageUrls(
 async function auditPageUrlChunk(
   records: readonly UrlRecord[],
   args: LiveCliArgs,
-  fetcher: FetchLike,
-  resolveHost: ResolveHostLike,
+  liveFetcher: GuardedLiveFetcher,
 ): Promise<AuditFinding[][]> {
-  return mapConcurrent(records, args.auditConcurrency, async (record) => auditPageUrl(record, args, fetcher, resolveHost));
+  return mapConcurrent(records, args.auditConcurrency, async (record) => auditPageUrl(record, args, liveFetcher));
 }
 
 async function auditPageUrl(
   record: UrlRecord,
   args: LiveCliArgs,
-  fetcher: FetchLike,
-  resolveHost: ResolveHostLike,
+  liveFetcher: GuardedLiveFetcher,
 ): Promise<AuditFinding[]> {
   const findings: AuditFinding[] = [];
   const url = record.url;
@@ -1572,11 +1336,11 @@ async function auditPageUrl(
   }
 
   if (args.checkStatus) {
-    findings.push(...await auditStatus(record, args, fetcher, resolveHost));
+    findings.push(...await auditStatus(record, args, liveFetcher));
   }
 
   if (args.checkCanonical || args.requireCanonical || args.checkNoindex) {
-    findings.push(...await auditPageBody(record, args, fetcher, resolveHost));
+    findings.push(...await auditPageBody(record, args, liveFetcher));
   }
 
   return findings;
@@ -1585,32 +1349,29 @@ async function auditPageUrl(
 async function auditStatus(
   record: UrlRecord,
   args: LiveCliArgs,
-  fetcher: FetchLike,
-  resolveHost: ResolveHostLike,
+  liveFetcher: GuardedLiveFetcher,
 ): Promise<AuditFinding[]> {
   let fetchResult: FetchResult;
   const url = record.url;
 
   try {
-    fetchResult = await fetchLive(fetcher, url, {
+    fetchResult = await liveFetcher.fetch(url, {
       method: args.statusMethod === "head" ? "HEAD" : "GET",
       headers: {
-        "user-agent": args.userAgent,
         "accept": "*/*",
       },
-    }, args, resolveHost, { followRedirects: false });
+      followRedirects: false,
+    });
 
-    if (args.statusMethod === "head" && (fetchResult.response.status === 405 || fetchResult.response.status === 501)) {
-      fetchResult = await fetchLive(fetcher, url, {
+    if (args.statusMethod === "head" && (fetchResult.status === 405 || fetchResult.status === 501)) {
+      fetchResult = await liveFetcher.fetch(url, {
         method: "GET",
         headers: {
-          "user-agent": args.userAgent,
           "accept": "*/*",
         },
-      }, args, resolveHost, { followRedirects: false });
+        followRedirects: false,
+      });
     }
-
-    await fetchResult.response.body?.cancel();
   } catch (error) {
     return [{
       code: "LIVE_STATUS_UNREACHABLE",
@@ -1624,21 +1385,21 @@ async function auditStatus(
     }];
   }
 
-  const { response } = fetchResult;
+  const { status, headers } = fetchResult;
 
-  if (response.status >= 200 && response.status < 300) {
+  if (status >= 200 && status < 300) {
     return [];
   }
 
   return [{
-    code: response.status >= 300 && response.status < 400 ? "LIVE_STATUS_REDIRECT" : "LIVE_STATUS_BAD",
+    code: status >= 300 && status < 400 ? "LIVE_STATUS_REDIRECT" : "LIVE_STATUS_BAD",
     severity: "error",
-    message: `URL returned HTTP ${response.status}.`,
+    message: `URL returned HTTP ${status}.`,
     url,
     context: {
       ...urlRecordContext(record),
-      status: response.status,
-      location: response.headers.get("location") ?? undefined,
+      status,
+      location: headers.get("location") ?? undefined,
     },
   }];
 }
@@ -1646,20 +1407,20 @@ async function auditStatus(
 async function auditPageBody(
   record: UrlRecord,
   args: LiveCliArgs,
-  fetcher: FetchLike,
-  resolveHost: ResolveHostLike,
+  liveFetcher: GuardedLiveFetcher,
 ): Promise<AuditFinding[]> {
   let fetchResult: FetchResult;
   const url = record.url;
 
   try {
-    fetchResult = await fetchLive(fetcher, url, {
+    fetchResult = await liveFetcher.fetch(url, {
       method: "GET",
       headers: {
-        "user-agent": args.userAgent,
         "accept": "text/html,application/xhtml+xml,*/*",
       },
-    }, args, resolveHost, { followRedirects: true });
+      followRedirects: true,
+      maxBytes: args.maxPageBytes,
+    });
   } catch (error) {
     return [{
       code: "LIVE_PAGE_UNREACHABLE",
@@ -1673,34 +1434,32 @@ async function auditPageBody(
     }];
   }
 
-  const { response, finalUrl, redirects } = fetchResult;
+  const { status, ok, headers, bytes, finalUrl, redirects } = fetchResult;
 
-  if (!response.ok) {
-    await response.body?.cancel();
+  if (!ok) {
     return [{
       code: "LIVE_PAGE_STATUS_BAD",
       severity: "error",
-      message: `URL returned HTTP ${response.status}; page metadata audit was skipped.`,
+      message: `URL returned HTTP ${status}; page metadata audit was skipped.`,
       url,
       context: {
         ...urlRecordContext(record),
-        status: response.status,
+        status,
         finalUrl,
         redirects,
       },
     }];
   }
 
-  const bytes = await readResponseBytes(response, args.maxPageBytes);
-  const html = new TextDecoder().decode(bytes);
+  const html = new TextDecoder().decode(bytes ?? new Uint8Array());
   const findings: AuditFinding[] = [];
 
   if (args.checkCanonical || args.requireCanonical) {
-    findings.push(...auditCanonical(record, response.headers, html, args.requireCanonical, finalUrl, redirects));
+    findings.push(...auditCanonical(record, headers, html, args.requireCanonical, finalUrl, redirects));
   }
 
   if (args.checkNoindex) {
-    findings.push(...auditNoindex(record, response.headers, html, finalUrl, redirects));
+    findings.push(...auditNoindex(record, headers, html, finalUrl, redirects));
   }
 
   return findings;
@@ -1876,267 +1635,14 @@ function parseTagAttributes(tag: string): Map<string, string> {
   return attrs;
 }
 
-async function fetchLive(
-  fetcher: FetchLike,
-  rawUrl: string,
-  init: RequestInit,
-  args: LiveCliArgs,
-  resolveHost: ResolveHostLike,
-  options: LiveFetchOptions,
-): Promise<FetchResult> {
-  let currentUrl = parseHttpUrlForFetch(rawUrl);
-  const redirects: string[] = [];
-
-  while (true) {
-    await assertLiveFetchAllowed(currentUrl, args, resolveHost);
-
-    const response = await fetchWithTimeout(fetcher, currentUrl.href, {
-      ...init,
-      redirect: "manual",
-    }, args.timeoutMs);
-
-    if (!options.followRedirects || !isRedirectStatus(response.status)) {
-      return {
-        response,
-        finalUrl: currentUrl.href,
-        redirects,
-      };
-    }
-
-    const location = response.headers.get("location");
-
-    if (!location) {
-      return {
-        response,
-        finalUrl: currentUrl.href,
-        redirects,
-      };
-    }
-
-    await response.body?.cancel();
-
-    if (redirects.length >= args.maxRedirects) {
-      throw new Error(`Fetch exceeded ${args.maxRedirects} redirects while loading ${rawUrl}.`);
-    }
-
-    currentUrl = parseHttpUrlForFetch(new URL(location, currentUrl).href);
-    redirects.push(currentUrl.href);
-  }
-}
-
-function parseHttpUrlForFetch(rawUrl: string): URL {
-  let parsed: URL;
-
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    throw new Error(`Live fetch URL is not valid: ${rawUrl}`);
-  }
-
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(`Live fetch URL must use http:// or https://: ${rawUrl}`);
-  }
-
-  if (!parsed.hostname) {
-    throw new Error(`Live fetch URL must include a hostname: ${rawUrl}`);
-  }
-
-  return parsed;
-}
-
-async function assertLiveFetchAllowed(url: URL, args: LiveCliArgs, resolveHost: ResolveHostLike): Promise<void> {
-  if (args.allowPrivateHosts) {
-    return;
-  }
-
-  const hostname = stripIpv6Brackets(url.hostname);
-
-  if (isLocalHostname(hostname)) {
-    throw new Error(`Refusing to fetch local hostname ${url.hostname}. Pass --allow-private-hosts only when you trust the target.`);
-  }
-
-  if (isIP(hostname)) {
-    assertPublicIp(hostname, url.href);
-    return;
-  }
-
-  const records = await resolveHost(hostname);
-
-  if (records.length === 0) {
-    throw new Error(`Hostname ${hostname} did not resolve.`);
-  }
-
-  for (const record of records) {
-    assertPublicIp(record.address, url.href);
-  }
-}
-
-async function defaultResolveHost(hostname: string): Promise<readonly { address: string; family: number }[]> {
-  return lookup(hostname, { all: true, verbatim: true });
-}
-
-function assertPublicIp(address: string, url: string): void {
-  if (isNonPublicIp(address)) {
-    throw new Error(`Refusing to fetch ${url} because ${address} is private, local, reserved, or non-public. Pass --allow-private-hosts only when you trust the target.`);
-  }
-}
-
-function stripIpv6Brackets(hostname: string): string {
-  return hostname.startsWith("[") && hostname.endsWith("]")
-    ? hostname.slice(1, -1)
-    : hostname;
-}
-
-function isLocalHostname(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
-  return normalized === "localhost" || normalized.endsWith(".localhost");
-}
-
-function isNonPublicIp(address: string): boolean {
-  const normalized = normalizeIpAddress(address);
-  const version = isIP(normalized);
-
-  if (version === 4) {
-    return isNonPublicIpv4(normalized);
-  }
-
-  if (version === 6) {
-    return isNonPublicIpv6(normalized);
-  }
-
-  return true;
-}
-
-function normalizeIpAddress(address: string): string {
-  const withoutBrackets = stripIpv6Brackets(address.toLowerCase());
-  const zoneIndex = withoutBrackets.indexOf("%");
-  return zoneIndex >= 0 ? withoutBrackets.slice(0, zoneIndex) : withoutBrackets;
-}
-
-function isNonPublicIpv4(address: string): boolean {
-  const octets = address.split(".").map((part) => Number(part));
-  const [first, second, third] = octets;
-
-  if (
-    first === undefined
-    || second === undefined
-    || third === undefined
-    || octets.length !== 4
-    || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
-  ) {
-    return true;
-  }
-
-  return first === 0
-    || first === 10
-    || first === 127
-    || first >= 224
-    || (first === 100 && second >= 64 && second <= 127)
-    || (first === 169 && second === 254)
-    || (first === 172 && second >= 16 && second <= 31)
-    || (first === 192 && second === 168)
-    || (first === 192 && second === 0 && third === 0)
-    || (first === 192 && second === 0 && third === 2)
-    || (first === 198 && (second === 18 || second === 19))
-    || (first === 198 && second === 51 && third === 100)
-    || (first === 203 && second === 0 && third === 113);
-}
-
-function isNonPublicIpv6(address: string): boolean {
-  if (address.startsWith("::ffff:")) {
-    return isNonPublicIp(address.slice("::ffff:".length));
-  }
-
-  return address === "::"
-    || address === "::1"
-    || address.startsWith("fc")
-    || address.startsWith("fd")
-    || address.startsWith("fe8")
-    || address.startsWith("fe9")
-    || address.startsWith("fea")
-    || address.startsWith("feb")
-    || address.startsWith("ff")
-    || address.startsWith("2001:db8");
-}
-
-function isRedirectStatus(status: number): boolean {
-  return status === 301
-    || status === 302
-    || status === 303
-    || status === 307
-    || status === 308;
-}
-
-async function fetchWithTimeout(fetcher: FetchLike, url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => {
-    controller.abort();
-  }, timeoutMs);
-
-  try {
-    return await fetcher(url, {
-      ...init,
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function readResponseBytes(response: Response, maxBytes: number): Promise<Uint8Array> {
-  const reader = response.body?.getReader();
-
-  if (!reader) {
-    const bytes = new Uint8Array(await response.arrayBuffer());
-
-    if (bytes.byteLength > maxBytes) {
-      throw new Error(`Response exceeded ${maxBytes} bytes.`);
-    }
-
-    return bytes;
-  }
-
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-
-  while (true) {
-    const { done, value } = await reader.read();
-
-    if (done) {
-      break;
-    }
-
-    if (value) {
-      total += value.byteLength;
-
-      if (total > maxBytes) {
-        await reader.cancel();
-        throw new Error(`Response exceeded ${maxBytes} bytes.`);
-      }
-
-      chunks.push(value);
-    }
-  }
-
-  const output = new Uint8Array(total);
-  let offset = 0;
-
-  for (const chunk of chunks) {
-    output.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-
-  return output;
-}
-
-function shouldTreatAsGzip(url: string, response: Response): boolean {
-  const encoding = response.headers.get("content-encoding")?.toLowerCase();
+function shouldTreatAsGzip(url: string, headers: Headers): boolean {
+  const encoding = headers.get("content-encoding")?.toLowerCase();
 
   if (encoding?.includes("gzip")) {
     return false;
   }
 
-  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  const contentType = headers.get("content-type")?.toLowerCase() ?? "";
 
   return new URL(url).pathname.endsWith(".gz") || contentType.includes("gzip");
 }

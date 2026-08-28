@@ -237,7 +237,7 @@ test("live wrapper can run duplicate audits from a saved URL file", async (t) =>
   ]);
 });
 
-test("live wrapper checks robots.txt only when requested", async () => {
+test("live wrapper reports URLs disallowed by robots.txt when the robots audit is enabled", async () => {
   const fetcher = createFakeFetch({
     "GET https://example.com/robots.txt": new Response("User-agent: Googlebot\nDisallow: /blocked\n", {
       status: 200,
@@ -269,6 +269,172 @@ test("live wrapper checks robots.txt only when requested", async () => {
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("live wrapper does not fetch URLs without an opt-in audit flag", async (t) => {
+  const urlsPath = await createUrlsFile(t, "https://example.com/page\n");
+  let requests = 0;
+  const io = createIo();
+  const code = await runLiveCli([
+    "--urls-file",
+    urlsPath,
+    "--json",
+    "--detail",
+    "full",
+  ], io, {
+    fetch: async () => {
+      requests += 1;
+      throw new Error("Live URL fetch should remain opt-in.");
+    },
+    resolveHost: publicResolver,
+  });
+  const report = JSON.parse(io.output.stdout);
+
+  assert.equal(code, 0);
+  assert.equal(requests, 0);
+  assert.deepEqual(report.audits.enabledChecks, []);
+  assert.deepEqual(report.audits.findings, []);
+});
+
+test("live wrapper distinguishes redirect, bad, and unreachable status results", async (t) => {
+  const urlsPath = await createUrlsFile(t, [
+    "https://example.com/redirect",
+    "https://example.com/bad",
+    "https://example.com/unreachable",
+    "",
+  ].join("\n"));
+  const fetcher = createFakeFetch({
+    "HEAD https://example.com/redirect": new Response(null, {
+      status: 302,
+      headers: { location: "https://example.com/final" },
+    }),
+    "HEAD https://example.com/bad": new Response(null, { status: 503 }),
+  });
+  const io = createIo();
+  const code = await runLiveCli([
+    "--urls-file",
+    urlsPath,
+    "--check-status",
+    "--json",
+    "--detail",
+    "full",
+  ], io, { fetch: fetcher, resolveHost: publicResolver });
+  const report = JSON.parse(io.output.stdout);
+  const codes = report.audits.findings.map((finding) => finding.code);
+
+  assert.equal(code, 1);
+  assert.ok(codes.includes("LIVE_STATUS_REDIRECT"));
+  assert.ok(codes.includes("LIVE_STATUS_BAD"));
+  assert.ok(codes.includes("LIVE_STATUS_UNREACHABLE"));
+});
+
+test("live wrapper reports canonical and page-fetch failures separately", async (t) => {
+  const urlsPath = await createUrlsFile(t, [
+    "https://example.com/missing",
+    "https://example.com/invalid",
+    "https://example.com/bad",
+    "https://example.com/unreachable",
+    "",
+  ].join("\n"));
+  const fetcher = createFakeFetch({
+    "GET https://example.com/missing": new Response("<html><head></head></html>"),
+    "GET https://example.com/invalid": new Response('<html><head><link rel="canonical" href="http://["></head></html>'),
+    "GET https://example.com/bad": new Response("unavailable", { status: 503 }),
+  });
+  const io = createIo();
+  const code = await runLiveCli([
+    "--urls-file",
+    urlsPath,
+    "--require-canonical",
+    "--json",
+    "--detail",
+    "full",
+  ], io, { fetch: fetcher, resolveHost: publicResolver });
+  const report = JSON.parse(io.output.stdout);
+  const codes = report.audits.findings.map((finding) => finding.code);
+
+  assert.equal(code, 1);
+  assert.ok(codes.includes("LIVE_CANONICAL_MISSING"));
+  assert.ok(codes.includes("LIVE_CANONICAL_INVALID"));
+  assert.ok(codes.includes("LIVE_PAGE_STATUS_BAD"));
+  assert.ok(codes.includes("LIVE_PAGE_UNREACHABLE"));
+});
+
+test("live wrapper distinguishes unavailable and unreachable robots.txt", async (t) => {
+  const urlsPath = await createUrlsFile(t, [
+    "https://unavailable.example/page",
+    "https://unreachable.example/page",
+    "",
+  ].join("\n"));
+  const fetcher = createFakeFetch({
+    "GET https://unavailable.example/robots.txt": new Response("unavailable", { status: 503 }),
+  });
+  const io = createIo();
+  const code = await runLiveCli([
+    "--urls-file",
+    urlsPath,
+    "--check-robots",
+    "--audit-fail-on",
+    "warning",
+    "--json",
+    "--detail",
+    "full",
+  ], io, { fetch: fetcher, resolveHost: publicResolver });
+  const report = JSON.parse(io.output.stdout);
+  const codes = report.audits.findings.map((finding) => finding.code);
+
+  assert.equal(code, 1);
+  assert.ok(codes.includes("LIVE_ROBOTS_UNAVAILABLE"));
+  assert.ok(codes.includes("LIVE_ROBOTS_UNREACHABLE"));
+});
+
+test("live wrapper reports invalid saved URLs and caps stored findings", async (t) => {
+  const urlsPath = await createUrlsFile(t, "not a url\nhttps://example.com/bad-a\nhttps://example.com/bad-b\n");
+  const fetcher = createFakeFetch({
+    "HEAD https://example.com/bad-a": new Response(null, { status: 500 }),
+    "HEAD https://example.com/bad-b": new Response(null, { status: 500 }),
+  });
+  const io = createIo();
+  const code = await runLiveCli([
+    "--urls-file",
+    urlsPath,
+    "--check-status",
+    "--max-audit-findings",
+    "1",
+    "--json",
+    "--detail",
+    "full",
+  ], io, { fetch: fetcher, resolveHost: publicResolver });
+  const report = JSON.parse(io.output.stdout);
+
+  assert.equal(code, 1);
+  assert.equal(report.audits.counts.errors, 3);
+  assert.equal(report.audits.findings.length, 1);
+  assert.equal(report.audits.findings[0].code, "LIVE_URL_INVALID");
+  assert.equal(report.audits.omittedFindings, 2);
+});
+
+test("live wrapper reports when the configured URL audit sample is exhausted", async (t) => {
+  const urlsPath = await createUrlsFile(t, "https://example.com/a\nhttps://example.com/b\n");
+  const fetcher = createFakeFetch({
+    "HEAD https://example.com/a": new Response(null, { status: 200 }),
+  });
+  const io = createIo();
+  const code = await runLiveCli([
+    "--urls-file",
+    urlsPath,
+    "--check-status",
+    "--max-audit-urls",
+    "1",
+    "--json",
+    "--detail",
+    "full",
+  ], io, { fetch: fetcher, resolveHost: publicResolver });
+  const report = JSON.parse(io.output.stdout);
+
+  assert.equal(code, 0);
+  assert.equal(report.audits.auditedUrls, 1);
+  assert.ok(report.audits.findings.some((finding) => finding.code === "LIVE_AUDIT_URL_LIMIT_EXCEEDED"));
 });
 
 test("live wrapper traverses sitemap indexes and gzipped child sitemaps", async (t) => {
@@ -405,4 +571,12 @@ function createFakeFetch(responses) {
 
     return response.clone();
   };
+}
+
+async function createUrlsFile(t, contents) {
+  const directory = await mkdtemp(join(tmpdir(), "sitemap-live-cli-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, "urls.txt");
+  await writeFile(path, contents);
+  return path;
 }

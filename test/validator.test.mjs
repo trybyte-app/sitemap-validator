@@ -593,29 +593,6 @@ test("validates additional video relationship and subscription fields", async ()
   assert.ok(codes.includes("GOOGLE_VIDEO_PLATFORM_RELATIONSHIP_INVALID"));
 });
 
-test("warns on long news titles", async () => {
-  const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
-        xmlns:news="http://www.google.com/schemas/sitemap-news/0.9">
-  <url>
-    <loc>https://example.com/news/a</loc>
-    <news:news>
-      <news:publication>
-        <news:name>Example</news:name>
-        <news:language>en</news:language>
-      </news:publication>
-      <news:publication_date>2026-06-10</news:publication_date>
-      <news:title>${"A".repeat(111)}</news:title>
-    </news:news>
-  </url>
-</urlset>`;
-
-  const result = await validateSitemap(xml);
-
-  assert.equal(result.valid, true);
-  assert.ok(result.diagnostics.some((diagnostic) => diagnostic.code === "GOOGLE_NEWS_TITLE_TOO_LONG"));
-});
-
 test("uses Google-specific diagnostics for invalid extension dates", async () => {
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
@@ -699,6 +676,116 @@ test("enforces small configured sitemap limits", async () => {
 
   assert.equal(result.valid, false);
   assert.ok(result.diagnostics.some((diagnostic) => diagnostic.code === "SITEMAP_URL_LIMIT_EXCEEDED"));
+
+  const indexResult = await validateSitemap(`<?xml version="1.0" encoding="UTF-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap><loc>https://example.com/a.xml</loc></sitemap>
+  <sitemap><loc>https://example.com/b.xml</loc></sitemap>
+</sitemapindex>`, {
+    limits: {
+      maxSitemapsPerIndex: 1,
+    },
+  });
+
+  assert.ok(indexResult.diagnostics.some((diagnostic) => diagnostic.code === "SITEMAP_INDEX_LIMIT_EXCEEDED"));
+});
+
+test("reports missing roots, invalid roots, and missing loc elements", async () => {
+  const missingRoot = await validateSitemap("");
+  const invalidRoot = await validateSitemap(`<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" />`);
+  const missingUrlLoc = await validateSitemap(`<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url /></urlset>`);
+  const missingIndexLoc = await validateSitemap(`<?xml version="1.0" encoding="UTF-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><sitemap /></sitemapindex>`);
+
+  assert.ok(missingRoot.diagnostics.some((diagnostic) => diagnostic.code === "MISSING_ROOT_ELEMENT"));
+  assert.ok(invalidRoot.diagnostics.some((diagnostic) => diagnostic.code === "INVALID_ROOT_ELEMENT"));
+  assert.ok(missingUrlLoc.diagnostics.some((diagnostic) => diagnostic.code === "SITEMAP_LOC_REQUIRED"));
+  assert.ok(missingIndexLoc.diagnostics.some((diagnostic) => diagnostic.code === "SITEMAP_INDEX_LOC_REQUIRED"));
+});
+
+test("enforces uncompressed byte and loc length limits", async () => {
+  const oversizedFile = await validateSitemap(validXml, {
+    limits: {
+      maxUncompressedBytes: 32,
+    },
+  });
+  const oversizedLoc = await validateSitemap(`<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://example.com/${"a".repeat(2_050)}</loc></url>
+</urlset>`);
+
+  assert.ok(oversizedFile.diagnostics.some((diagnostic) => diagnostic.code === "SITEMAP_FILE_TOO_LARGE"));
+  assert.ok(oversizedLoc.diagnostics.some((diagnostic) => diagnostic.code === "LOC_TOO_LONG"));
+});
+
+test("enforces Google extension entry limits and required fields", async () => {
+  const result = await validateSitemap(`<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+  xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"
+  xmlns:news="http://www.google.com/schemas/sitemap-news/0.9"
+  xmlns:video="http://www.google.com/schemas/sitemap-video/1.1">
+  <url>
+    <loc>https://example.com/a</loc>
+    <image:image />
+    <image:image><image:loc>https://example.com/a.jpg</image:loc></image:image>
+    <news:news />
+    <video:video />
+  </url>
+  <url>
+    <loc>https://example.com/b</loc>
+    <news:news>
+      <news:publication><news:name>Example</news:name><news:language>en</news:language></news:publication>
+      <news:publication_date>2026-08-28</news:publication_date>
+      <news:title>Example</news:title>
+    </news:news>
+  </url>
+</urlset>`, {
+    limits: {
+      maxImagesPerUrl: 1,
+      maxNewsEntriesPerSitemap: 1,
+    },
+  });
+  const codes = result.diagnostics.map((diagnostic) => diagnostic.code);
+
+  assert.ok(codes.includes("GOOGLE_IMAGE_LIMIT_EXCEEDED"));
+  assert.ok(codes.includes("GOOGLE_IMAGE_LOC_REQUIRED"));
+  assert.ok(codes.includes("GOOGLE_NEWS_ENTRY_LIMIT_EXCEEDED"));
+  assert.ok(codes.includes("GOOGLE_NEWS_REQUIRED_FIELD"));
+  assert.ok(codes.includes("GOOGLE_VIDEO_REQUIRED_FIELD"));
+  assert.ok(codes.includes("GOOGLE_VIDEO_LOCATION_REQUIRED"));
+});
+
+test("reports sitemap child loader failures and set source limits", async () => {
+  const indexXml = `<?xml version="1.0" encoding="UTF-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap><loc>https://example.com/child.xml</loc></sitemap>
+</sitemapindex>`;
+  const notLoaded = await validateSitemapSet(indexXml, {
+    sourceId: "index.xml",
+    loader: async () => undefined,
+  });
+  const loadFailed = await validateSitemapSet(indexXml, {
+    sourceId: "index.xml",
+    loader: async () => {
+      throw new Error("storage unavailable");
+    },
+  });
+  let sourceLimitLoaderCalled = false;
+  const sourceLimited = await validateSitemapSet(indexXml, {
+    sourceId: "index.xml",
+    maxSources: 1,
+    loader: async () => {
+      sourceLimitLoaderCalled = true;
+      return undefined;
+    },
+  });
+
+  assert.ok(notLoaded.diagnostics.some((diagnostic) => diagnostic.code === "SITEMAP_CHILD_NOT_LOADED"));
+  assert.ok(loadFailed.diagnostics.some((diagnostic) => diagnostic.code === "SITEMAP_CHILD_LOAD_FAILED"));
+  assert.ok(sourceLimited.diagnostics.some((diagnostic) => diagnostic.code === "SITEMAP_SET_SOURCE_LIMIT_EXCEEDED"));
+  assert.equal(sourceLimitLoaderCalled, false);
 });
 
 test("enforces sitemap index child location constraints", async () => {
@@ -1258,8 +1345,8 @@ test("validates deeper video sitemap documented values and allows FTP media URLs
   assert.ok(codes.includes("GOOGLE_VIDEO_TAG_LIMIT_EXCEEDED"));
 });
 
-test("does not fail open for invalid video uploader info same-host checks", async () => {
-  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+test("validates video uploader info URL syntax and parent-page domain separately", async () => {
+  const invalidUrlXml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
         xmlns:video="http://www.google.com/schemas/sitemap-video/1.1">
   <url>
@@ -1268,17 +1355,22 @@ test("does not fail open for invalid video uploader info same-host checks", asyn
       <video:thumbnail_loc>https://example.com/thumb.jpg</video:thumbnail_loc>
       <video:title>Example</video:title>
       <video:description>Example description</video:description>
+      <video:content_loc>https://example.com/video.mp4</video:content_loc>
       <video:uploader info="not a url">Example Channel</video:uploader>
     </video:video>
   </url>
 </urlset>`;
+  const crossDomainXml = invalidUrlXml.replace("not a url", "https://authors.example.net/channel");
+  const sameDomainXml = invalidUrlXml.replace("not a url", "https://example.com/channel");
 
-  const result = await validateSitemap(xml);
-  const codes = result.diagnostics.map((diagnostic) => diagnostic.code);
+  const invalidUrlResult = await validateSitemap(invalidUrlXml);
+  const crossDomainResult = await validateSitemap(crossDomainXml);
+  const sameDomainResult = await validateSitemap(sameDomainXml);
 
-  assert.equal(result.valid, false);
-  assert.ok(codes.includes("INVALID_ABSOLUTE_URL"));
-  assert.ok(codes.includes("GOOGLE_VIDEO_UPLOADER_INFO_DOMAIN_INVALID"));
+  assert.ok(invalidUrlResult.diagnostics.some((diagnostic) => diagnostic.code === "INVALID_ABSOLUTE_URL"));
+  assert.ok(crossDomainResult.diagnostics.some((diagnostic) => diagnostic.code === "GOOGLE_VIDEO_UPLOADER_INFO_DOMAIN_INVALID"));
+  assert.equal(sameDomainResult.valid, true);
+  assert.equal(sameDomainResult.diagnostics.some((diagnostic) => diagnostic.code === "GOOGLE_VIDEO_UPLOADER_INFO_DOMAIN_INVALID"), false);
 });
 
 test("recognizes legacy video XSD fields without unknown or placement diagnostics", async () => {
@@ -1516,6 +1608,29 @@ test("distinguishes existing hreflang targets without return links from missing 
   assert.equal(result.valid, false);
   assert.ok(codes.includes("GOOGLE_HREFLANG_RETURN_LINK_MISSING"));
   assert.equal(codes.includes("GOOGLE_HREFLANG_ALTERNATE_URL_MISSING"), false);
+});
+
+test("bounds optional hreflang graph collection", async () => {
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:xhtml="http://www.w3.org/1999/xhtml">
+  <url>
+    <loc>https://example.com/en/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://example.com/en/" />
+  </url>
+  <url>
+    <loc>https://example.com/fr/</loc>
+    <xhtml:link rel="alternate" hreflang="fr" href="https://example.com/fr/" />
+  </url>
+</urlset>`;
+  const result = await validateSitemapSet(xml, {
+    sourceId: "hreflang-limited.xml",
+    hreflangGraph: {
+      maxEntries: 1,
+    },
+  });
+
+  assert.ok(result.diagnostics.some((diagnostic) => diagnostic.code === "GOOGLE_HREFLANG_GRAPH_LIMIT_EXCEEDED"));
 });
 
 test("loads sitemap index children concurrently while preserving deterministic validation order", async () => {

@@ -8,14 +8,14 @@ standards-aligned, and ready to submit.
 
 ```bash
 npm install @trybyte/sitemap-validator
-pnpm install @trybyte/sitemap-validator
-bun install @trybyte/sitemap-validator
+pnpm add @trybyte/sitemap-validator
+bun add @trybyte/sitemap-validator
 ```
 
 Requirements: Node.js 20 or newer for the CLI and Node file-system helpers.
 Browser apps should import from `@trybyte/sitemap-validator/browser`.
 
-## Core Use Case
+## Core use case
 
 Generate the sitemap with your application, write it to a local file, then run
 `sitemap-validator` against that generated file before deploy.
@@ -61,7 +61,7 @@ npx @trybyte/sitemap-validator ./build/sitemap.xml \
 The validator still reads `./build/sitemap.xml`; it does not fetch
 `https://example.com/sitemap.xml`.
 
-## CI/CD Workflow
+## CI/CD workflow
 
 The CI gate should run after sitemap generation and before deployment.
 
@@ -107,7 +107,7 @@ jobs:
 If the generated XML is invalid, the `npx @trybyte/sitemap-validator ...` step exits non-zero
 and the deployment does not continue.
 
-## Sitemap Indexes
+## Sitemap indexes
 
 For a sitemap index, pass the generated index file. If child sitemap files are
 also generated locally, map their public URL prefix to the local directory:
@@ -123,7 +123,7 @@ When the index contains `https://example.com/products.xml`, the CLI loads
 `./build/products.xml`. This validates the generated sitemap set without
 fetching live URLs.
 
-## Live Sitemap Wrapper
+## Live sitemap wrapper
 
 Use `sitemap-validator-live` when you need to fetch or audit an already-published sitemap:
 feed it a downloaded sitemap file, a live sitemap URL, or a saved URL list, then
@@ -202,9 +202,9 @@ npx --package @trybyte/sitemap-validator sitemap-validator-live --urls-file site
   --check-noindex
 ```
 
-`--urls-file` accepts either the plain text file from `--save-urls` or the JSONL
-file from `--save-url-details`. Use the JSONL file when you want later audit
-findings to keep `sourceSitemap` context.
+`--urls-file` accepts the plain text file from `--save-urls`, a JSON array of URL
+strings, or the JSONL file from `--save-url-details`. Use the JSONL file when you
+want later audit findings to keep `sourceSitemap` context.
 
 Live audits are opt-in:
 
@@ -273,6 +273,12 @@ reserved hosts, and it applies that check to followed redirects. Use
 `--allow-private-hosts` only when you intentionally audit a trusted staging or
 internal site.
 
+Every live request has a 15-second timeout by default. The timeout stays active
+while the wrapper reads the response body. Sitemap responses are capped at 60
+MiB, page bodies at 2 MiB, robots.txt at 512 KiB, and guarded redirects at five.
+Change these limits with `--timeout-ms`, `--max-sitemap-bytes`,
+`--max-page-bytes`, `--max-robots-bytes`, and `--max-redirects`.
+
 ## Library API
 
 Validate one sitemap document:
@@ -314,7 +320,7 @@ const result = await validateSitemapSet({
 assertValidForCi(result, "ciDefault");
 ```
 
-## Browser And Vite Apps
+## Browser and Vite apps
 
 For an online validator, import the browser entry. It accepts uploaded XML as a
 string, `Uint8Array`, `ArrayBuffer`, or chunk iterable and does not expose the
@@ -369,7 +375,7 @@ root input. For sitemap-set children, loader-returned `sourceId`, `gzip`, and
 `sitemapLocation` metadata take precedence over metadata embedded inside the
 returned child input object.
 
-## Validation Scope
+## Validation scope
 
 Included:
 
@@ -398,7 +404,7 @@ Not included in the core XML validator:
 Those are separate audit concerns. In this package, they live only in the
 `sitemap-validator-live` wrapper and only run when the user opts in.
 
-## Standards Sources
+## Standards sources
 
 Diagnostics include rule provenance. The main sources are:
 
@@ -445,7 +451,7 @@ console.log(evaluateForCi(result, "strict"));
 ## Development
 
 ```bash
-nvm use
+fnm use
 npm ci
 npm run typecheck
 npm run lint

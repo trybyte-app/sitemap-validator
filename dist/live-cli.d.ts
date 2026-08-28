@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import "./node-input.js";
 import type { CiPolicyPreset } from "./ci.js";
+import type { LiveFetchAdapter, ResolveHostAdapter } from "./guarded-live-fetch.js";
 import type { ReportDetailLevel } from "./report.js";
 import type { DiagnosticSeverity } from "./types.js";
 declare const USER_AGENT_PRESETS: {
@@ -28,11 +29,6 @@ declare const USER_AGENT_PRESETS: {
 type OutputFormat = "text" | "json";
 type AuditFailOn = "none" | "error" | "warning";
 type StatusMethod = "head" | "get";
-type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
-type ResolveHostLike = (hostname: string) => Promise<readonly {
-    address: string;
-    family: number;
-}[]>;
 interface WritableLike {
     write(chunk: string): unknown;
 }
@@ -41,8 +37,8 @@ interface CliIo {
     stderr: WritableLike;
 }
 interface LiveCliDependencies {
-    fetch?: FetchLike | undefined;
-    resolveHost?: ResolveHostLike | undefined;
+    fetch?: LiveFetchAdapter | undefined;
+    resolveHost?: ResolveHostAdapter | undefined;
 }
 interface LiveCliArgs {
     target: string | undefined;

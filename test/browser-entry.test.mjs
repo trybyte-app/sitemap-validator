@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import test from "node:test";
 
 test("browser entry validates uploaded XML without exposing file-system helpers", async () => {
@@ -21,17 +22,52 @@ test("browser entry validates uploaded XML without exposing file-system helpers"
 });
 
 test("browser entry and shared declarations do not reference Node built-ins", async () => {
-  const files = await Promise.all([
-    readFile("dist/browser.js", "utf8"),
-    readFile("dist/browser.d.ts", "utf8"),
-    readFile("dist/validator.js", "utf8"),
-    readFile("dist/input.js", "utf8"),
-    readFile("dist/set.js", "utf8"),
-    readFile("dist/url.js", "utf8"),
-    readFile("dist/types.d.ts", "utf8"),
-  ]);
+  const runtimeGraph = await readRelativeModuleGraph("dist/browser.js");
+  const declarationGraph = await readRelativeModuleGraph("dist/browser.d.ts");
+  const files = [...runtimeGraph.values(), ...declarationGraph.values()];
 
   for (const file of files) {
     assert.doesNotMatch(file, /node:/);
   }
+
+  assert.equal([...runtimeGraph.keys()].some((path) => path.endsWith("/extension-validation.js")), true);
 });
+
+async function readRelativeModuleGraph(entryPath) {
+  const pending = [resolve(entryPath)];
+  const files = new Map();
+
+  while (pending.length > 0) {
+    const path = pending.pop();
+
+    if (!path || files.has(path)) {
+      continue;
+    }
+
+    const source = await readFile(path, "utf8");
+    files.set(path, source);
+
+    for (const specifier of moduleSpecifiers(source)) {
+      assert.equal(specifier.startsWith("node:"), false, `${path} imports ${specifier}`);
+
+      if (specifier.startsWith(".")) {
+        pending.push(resolveModuleSpecifier(path, specifier));
+      }
+    }
+  }
+
+  return files;
+}
+
+function moduleSpecifiers(source) {
+  return [...source.matchAll(/\b(?:import|export)\s+(?:type\s+)?(?:[^"']*?\s+from\s+)?["']([^"']+)["']/g)]
+    .map((match) => match[1]);
+}
+
+function resolveModuleSpecifier(importerPath, specifier) {
+  const resolved = resolve(dirname(importerPath), specifier);
+
+  return importerPath.endsWith(".d.ts") && resolved.endsWith(".js")
+    ? `${resolved.slice(0, -3)}.d.ts`
+    : resolved;
+}

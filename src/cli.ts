@@ -3,6 +3,7 @@ import "./node-input.js";
 import { access, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createCiPolicyEvaluator } from "./ci-policy-evaluator.js";
 import { resolveCiPolicy } from "./ci.js";
 import { createLocalSitemapLoader } from "./loaders.js";
 import { countDiagnostics, createDiagnosticSummaryBuilder } from "./report.js";
@@ -109,16 +110,6 @@ interface CliPolicyReport {
   failOnRules: readonly string[];
   allowRules: readonly string[];
   maxWarnings: number | undefined;
-}
-
-interface StreamingPolicyState {
-  failOn: ReadonlySet<DiagnosticSeverity>;
-  failOnRules: ReadonlySet<string>;
-  allowRules: ReadonlySet<string>;
-  maxWarnings: number | undefined;
-  warnings: number;
-  errors: number;
-  failingDiagnostics: SitemapDiagnostic[];
 }
 
 interface CliReport {
@@ -374,7 +365,7 @@ async function validateFromCliArgs(args: CliArgs): Promise<CliReport> {
   });
   const summaries: ValidationSummary[] = [];
   const cliPolicy = createCliPolicy(args);
-  const policyState = createStreamingPolicyState(cliPolicy);
+  const policyEvaluator = createCiPolicyEvaluator(cliPolicy);
   let setSummary: SitemapSetSummary | undefined;
 
   for await (const event of validateSitemapSetEvents(root.input, {
@@ -391,7 +382,7 @@ async function validateFromCliArgs(args: CliArgs): Promise<CliReport> {
 
     if (event.type === "diagnostic") {
       diagnosticSummaryBuilder.add(event.diagnostic);
-      updatePolicyState(policyState, event.diagnostic);
+      policyEvaluator.add(event.diagnostic);
 
       if (collectDiagnostics) {
         diagnostics.push(event.diagnostic);
@@ -410,7 +401,7 @@ async function validateFromCliArgs(args: CliArgs): Promise<CliReport> {
   const elapsedMs = Math.round(performance.now() - startedAt);
   const diagnosticSummary = diagnosticSummaryBuilder.summary();
   const summary = setSummary ?? createFallbackSetSummary(summaries, diagnosticSummary.counts);
-  const evaluation = finishPolicyEvaluation(policyState);
+  const evaluation = policyEvaluator.evaluation();
 
   return {
     target,
@@ -672,59 +663,6 @@ function createPolicyReport(args: CliArgs, policy: CiPolicy): CliPolicyReport {
 
 function uniqueList<T>(values: readonly T[]): T[] {
   return [...new Set(values)];
-}
-
-function createStreamingPolicyState(policy: CiPolicy): StreamingPolicyState {
-  return {
-    failOn: new Set(policy.failOn ?? ["error"]),
-    failOnRules: new Set(policy.failOnRules ?? []),
-    allowRules: new Set(policy.allowRules ?? []),
-    maxWarnings: policy.maxWarnings,
-    warnings: 0,
-    errors: 0,
-    failingDiagnostics: [],
-  };
-}
-
-function updatePolicyState(state: StreamingPolicyState, diagnostic: SitemapDiagnostic): void {
-  if (state.allowRules.has(diagnostic.code)) {
-    return;
-  }
-
-  if (diagnostic.severity === "error") {
-    state.errors += 1;
-  }
-
-  if (diagnostic.severity === "warning") {
-    state.warnings += 1;
-  }
-
-  if (state.failOn.has(diagnostic.severity) || state.failOnRules.has(diagnostic.code)) {
-    state.failingDiagnostics.push(diagnostic);
-  }
-}
-
-function finishPolicyEvaluation(state: StreamingPolicyState): CiEvaluation {
-  const warningLimitExceeded = state.maxWarnings !== undefined && state.warnings > state.maxWarnings;
-  const passed = state.failingDiagnostics.length === 0 && !warningLimitExceeded;
-  const failureReasons = [
-    state.failingDiagnostics.length > 0
-      ? `${state.failingDiagnostics.length} diagnostic${state.failingDiagnostics.length === 1 ? "" : "s"} matched the CI failure policy.`
-      : undefined,
-    warningLimitExceeded
-      ? `Warning count ${state.warnings} exceeded the configured maxWarnings ${state.maxWarnings}.`
-      : undefined,
-  ].filter((reason): reason is string => typeof reason === "string");
-
-  return {
-    passed,
-    exitCode: passed ? 0 : 1,
-    failingDiagnostics: state.failingDiagnostics,
-    warnings: state.warnings,
-    errors: state.errors,
-    warningLimitExceeded,
-    failureReasons,
-  };
 }
 
 async function resolveRootInput(target: string, args: CliArgs): Promise<ResolvedRootInput> {
