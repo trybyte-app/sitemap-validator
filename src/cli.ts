@@ -8,6 +8,7 @@ import { resolveCiPolicy } from "./ci.js";
 import { createLocalSitemapLoader } from "./loaders.js";
 import { countDiagnostics, createDiagnosticSummaryBuilder } from "./report.js";
 import { validateSitemapSetEvents } from "./set.js";
+import { isMainModule } from "./node-main.js";
 import type { CiPolicy, CiPolicyPreset, CiEvaluation } from "./ci.js";
 import type { DiagnosticCounts, DiagnosticSummary, ReportDetailLevel } from "./report.js";
 import type {
@@ -935,17 +936,7 @@ function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function isMainModule(): boolean {
-  const invokedPath = process.argv[1];
-
-  if (!invokedPath) {
-    return false;
-  }
-
-  return import.meta.url === pathToFileURL(invokedPath).href;
-}
-
-if (isMainModule()) {
+if (isMainModule(import.meta.url)) {
   runCli().then((exitCode) => {
     process.exitCode = exitCode;
   }).catch((error: unknown) => {

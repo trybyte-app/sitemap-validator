@@ -2,6 +2,13 @@
 
 All notable changes to this package will be documented in this file.
 
+## 1.0.2 - 2026-08-28
+
+- Fixed `sitemap-validator` and `sitemap-validator-live` when npm invokes them
+  through generated `.bin` symlinks.
+- Added regression coverage that runs both package binaries through npm-style
+  symlink paths.
+
 ## 1.0.1 - 2026-08-28
 
 - Split Google extension validation, live URL storage, guarded live fetching,

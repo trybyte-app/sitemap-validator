@@ -14,6 +14,7 @@ import { evaluateForCi, resolveCiPolicy } from "./ci.js";
 import { createGuardedLiveFetcher } from "./guarded-live-fetch.js";
 import { createLiveUrlDatasetCollector, LiveUrlDatasetError, openLiveUrlDataset, } from "./live-url-dataset.js";
 import { createLocalSitemapLoader } from "./loaders.js";
+import { isMainModule } from "./node-main.js";
 import { createDiagnosticSummaryBuilder } from "./report.js";
 import { validateSitemapSetEvents } from "./set.js";
 const DEFAULT_MAX_DEPTH = 10;
@@ -1687,7 +1688,7 @@ function resolveLocalPath(target) {
 function toErrorMessage(error) {
     return error instanceof Error ? error.message : String(error);
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainModule(import.meta.url)) {
     runLiveCli().then((code) => {
         process.exitCode = code;
     }).catch((error) => {

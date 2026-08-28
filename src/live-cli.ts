@@ -18,6 +18,7 @@ import {
   openLiveUrlDataset,
 } from "./live-url-dataset.js";
 import { createLocalSitemapLoader } from "./loaders.js";
+import { isMainModule } from "./node-main.js";
 import { createDiagnosticSummaryBuilder } from "./report.js";
 import { validateSitemapSetEvents } from "./set.js";
 import type { CiEvaluation, CiPolicy, CiPolicyPreset } from "./ci.js";
@@ -2204,7 +2205,7 @@ function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainModule(import.meta.url)) {
   runLiveCli().then((code) => {
     process.exitCode = code;
   }).catch((error: unknown) => {

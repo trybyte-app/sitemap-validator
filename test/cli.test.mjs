@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
 const validXml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -112,9 +112,30 @@ test("CLI rejects remote sitemap targets without fetching them", async () => {
   assert.match(result.stderr, /--sitemap-location/);
 });
 
+test("package binaries run through npm-style symlinks", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "sitemap-bin-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const coreBin = join(directory, "sitemap-validator");
+  const liveBin = join(directory, "sitemap-validator-live");
+  await symlink(resolve("dist/cli.js"), coreBin);
+  await symlink(resolve("dist/live-cli.js"), liveBin);
+
+  const coreResult = await runNodeScript(coreBin, ["--help"]);
+  const liveResult = await runNodeScript(liveBin, ["--help"]);
+
+  assert.equal(coreResult.code, 0);
+  assert.match(coreResult.stdout, /sitemap-validator <generated-file>/);
+  assert.equal(liveResult.code, 0);
+  assert.match(liveResult.stdout, /sitemap-validator-live <sitemap-url-or-file>/);
+});
+
 function runCli(args) {
+  return runNodeScript("dist/cli.js", args);
+}
+
+function runNodeScript(scriptPath, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["dist/cli.js", ...args], {
+    const child = spawn(process.execPath, [scriptPath, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";

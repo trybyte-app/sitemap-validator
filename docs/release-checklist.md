@@ -9,6 +9,8 @@ Use this before publishing a package version.
 - Run `npm ci` from a clean install when practical.
 - Run `npm run verify:release`.
 - Review the `npm pack --dry-run` file list printed by `npm run pack:dry-run`.
+- Confirm both package binaries run through npm-style `.bin` symlinks, not only
+  from direct `dist` paths.
 - Confirm GitHub repository description, topics, and homepage are current.
 - Confirm npm authentication has publish rights for the `@trybyte` organization.
 
