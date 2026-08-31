@@ -2,6 +2,21 @@
 
 All notable changes to this package will be documented in this file.
 
+## 1.0.3 - 2026-08-31
+
+- Fixed foreign-element placement, unexpected character data, invalid sitemap
+  locations, date bounds, decimal priority syntax, and Unicode character limits.
+- Made sitemap depth limits block incomplete validation, bounded concurrent
+  source loading, and preserved cancellation through input and loader completion.
+- Corrected local URL-to-file mapping and stopped upstream gzip consumption
+  when the decompressed size limit is reached.
+- Corrected IPv6 public-address checks, inactive HTML metadata handling, and
+  crawler-specific robots directives in live audits.
+- Bounded compact CI reports, corrected mixed diagnostic group output, rejected
+  incompatible saved-URL options, and handled closed stdout pipes in both CLIs.
+- Added optional loader abort signals and diagnostic group variation metadata,
+  two blocking diagnostic codes, and 25 regression tests.
+
 ## 1.0.2 - 2026-08-28
 
 - Fixed `sitemap-validator` and `sitemap-validator-live` when npm invokes them

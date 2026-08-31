@@ -28,6 +28,7 @@ export declare class ExtensionValidator {
 }
 export declare function isExtensionNamespace(uri: string): boolean;
 export declare function shouldCollectExtensionText(element: Pick<ExtensionElement, "local" | "uri">): boolean;
+export declare function isElementOnlyExtensionContainer(element: Pick<ExtensionElement, "local" | "uri">): boolean;
 export interface DateTimeValidationOptions {
     requireTimeSeconds?: boolean;
 }

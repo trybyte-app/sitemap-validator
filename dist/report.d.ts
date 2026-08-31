@@ -31,6 +31,7 @@ export interface DiagnosticSummaryGroup {
     omittedSources: number;
     firstLocation?: SourceLocation | undefined;
     spec?: string | undefined;
+    varies?: Array<"code" | "severity" | "source" | "message" | "spec"> | undefined;
 }
 export interface DiagnosticSummary {
     total: number;

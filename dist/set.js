@@ -72,7 +72,8 @@ export async function* validateSitemapSetEvents(input, options = {}) {
             break;
         }
         if (item.kind === "pending") {
-            const pendingBatch = takePendingBatch(item, queue, loaderConcurrency);
+            const remainingSourceCapacity = maxSources - processed;
+            const pendingBatch = takePendingBatch(item, queue, Math.min(loaderConcurrency, remainingSourceCapacity));
             const loadedBatch = await loadPendingBatch(pendingBatch, options);
             const loadedQueueItems = [];
             for (const outcome of loadedBatch) {
@@ -142,6 +143,24 @@ export async function* validateSitemapSetEvents(input, options = {}) {
             continue;
         }
         summaries.push(itemSummary);
+        const unvalidatedChildLocations = itemSummary.sitemapLocations.filter((loc) => !visitedLocations.has(loc));
+        if (itemSummary.rootType === "sitemapindex" &&
+            item.depth >= maxDepth &&
+            options.loader &&
+            unvalidatedChildLocations.length > 0) {
+            const diagnostic = createSetDiagnostic(itemSummary.sourceId, "SITEMAP_SET_DEPTH_LIMIT_EXCEEDED", "error", `Sitemap set validation stopped at depth ${maxDepth} with child sitemap locations still unvalidated.`, {
+                maxDepth,
+                unvalidatedChildren: unvalidatedChildLocations.length,
+            }, options);
+            if (isSetDiagnosticEnabled(options, diagnostic)) {
+                setDiagnostics.push(diagnostic);
+                yield emitSetEvent(options, {
+                    type: "diagnostic",
+                    sourceId: itemSummary.sourceId,
+                    diagnostic,
+                });
+            }
+        }
         if (itemSummary.rootType !== "sitemapindex" || item.depth >= maxDepth || !options.loader) {
             continue;
         }
@@ -278,13 +297,17 @@ async function loadChildSitemap(candidate, options) {
     }
     let loaded;
     try {
-        loaded = await options.loader({
+        loaded = await waitForLoader(options.loader({
             loc: candidate.loc,
             parentSourceId: candidate.parentSourceId,
             depth: candidate.depth,
-        });
+            signal: options.signal,
+        }), options.signal);
     }
     catch (error) {
+        if (options.signal?.aborted) {
+            throw options.signal.reason;
+        }
         const diagnostic = createSetDiagnostic(candidate.parentSourceId, "SITEMAP_CHILD_LOAD_FAILED", "error", "A sitemap index child loader threw while loading a child sitemap.", {
             loc: candidate.loc,
             depth: candidate.depth,
@@ -304,6 +327,27 @@ async function loadChildSitemap(candidate, options) {
         ...candidate,
         loaded,
     };
+}
+function waitForLoader(loaderPromise, signal) {
+    if (!signal) {
+        return loaderPromise;
+    }
+    signal.throwIfAborted();
+    return new Promise((resolve, reject) => {
+        const onAbort = () => {
+            signal.removeEventListener("abort", onAbort);
+            reject(signal.reason);
+        };
+        const settle = (handler) => (value) => {
+            signal.removeEventListener("abort", onAbort);
+            handler(value);
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        loaderPromise.then(settle(resolve), settle(reject));
+        if (signal.aborted) {
+            onAbort();
+        }
+    });
 }
 function createSetDiagnostic(sourceId, code, severity, message, context, options) {
     const definition = getRuleDefinition(code);

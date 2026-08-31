@@ -1,5 +1,6 @@
 import {
   ExtensionValidator,
+  isElementOnlyExtensionContainer,
   isExtensionNamespace,
   isValidCompleteW3cDateOrDateTime,
   shouldCollectExtensionText,
@@ -127,6 +128,16 @@ export async function* validateSitemapEvents(
   let stopParsing = false;
 
   emit(state, { type: "source:start", sourceId: state.sourceId });
+  if (options.sitemapLocation !== undefined && !state.sitemapLocation) {
+    addDiagnostic(state, {
+      code: "INVALID_ABSOLUTE_URL",
+      severity: "error",
+      source: "rfc3986",
+      message: "sitemapLocation must be a valid absolute URL.",
+      spec: "https://www.rfc-editor.org/rfc/rfc3986",
+      context: { sitemapLocation: options.sitemapLocation },
+    });
+  }
   yield* drain(state);
 
   try {
@@ -167,6 +178,8 @@ export async function* validateSitemapEvents(
       yield* drain(state);
     }
 
+    options.signal?.throwIfAborted();
+
     if (!stopParsing) {
       try {
         const tail = decoder.decode();
@@ -189,6 +202,7 @@ export async function* validateSitemapEvents(
       parser.close();
     }
   } catch (error) {
+    options.signal?.throwIfAborted();
     addDiagnostic(state, {
       code: "XML_PARSE_ERROR",
       severity: "error",
@@ -219,11 +233,11 @@ export async function* validateSitemapEvents(
 function createState(sourceId: string, options: ValidationOptions, limits: ValidationLimits): State {
   let sitemapLocation: URL | undefined;
 
-  if (options.sitemapLocation) {
+  if (options.sitemapLocation !== undefined) {
     try {
       sitemapLocation = new URL(options.sitemapLocation);
     } catch {
-      // Reported through URL checks only when relevant.
+      // The validation event stream reports this option error after source:start.
     }
   }
 
@@ -308,6 +322,8 @@ function createParser(state: State): XmlParserAdapter {
       const current = state.stack.at(-1);
       if (current?.text !== undefined) {
         current.text += text;
+      } else {
+        validateUnexpectedText(state, text, parser);
       }
     },
 
@@ -315,6 +331,8 @@ function createParser(state: State): XmlParserAdapter {
       const current = state.stack.at(-1);
       if (current?.text !== undefined) {
         current.text += text;
+      } else {
+        validateUnexpectedText(state, text, parser);
       }
     },
 
@@ -417,6 +435,8 @@ function validateElementPlacement(
     if (state.rootType === "sitemapindex" && !isAllowedSitemapIndexElement(parent.local, element.local)) {
       addDiagnostic(state, unexpectedElement(element.path, parser, state));
     }
+  } else if (parent.uri === SITEMAP_NS && !(state.rootType === "urlset" && parent.local === "url")) {
+    addDiagnostic(state, unexpectedElement(element.path, parser, state));
   }
 
   state.extensions.validatePlacement(
@@ -605,6 +625,33 @@ function shouldCollectText(element: Pick<StackItem, "local" | "uri">): boolean {
   return shouldCollectExtensionText(element);
 }
 
+function validateUnexpectedText(state: State, text: string, parser: XmlParserAdapter): void {
+  const current = state.stack.at(-1);
+  if (!current || text.trim().length === 0 || !isElementOnlyContainer(current)) {
+    return;
+  }
+
+  addDiagnostic(state, {
+    code: "SITEMAP_TEXT_UNEXPECTED",
+    severity: "error",
+    source: "sitemaps.org",
+    message: "Character data is not allowed in this element-only sitemap container.",
+    location: currentLocation(state, parser),
+    spec: "https://www.sitemaps.org/schemas/sitemap/0.9/sitemap.xsd",
+  });
+}
+
+function isElementOnlyContainer(element: Pick<StackItem, "local" | "uri">): boolean {
+  if (element.uri === SITEMAP_NS) {
+    return element.local === "urlset"
+      || element.local === "sitemapindex"
+      || element.local === "url"
+      || element.local === "sitemap";
+  }
+
+  return isElementOnlyExtensionContainer(element);
+}
+
 function isCustomUrlExtensionElement(state: State, element: Pick<StackItem, "uri">): boolean {
   const parent = state.stack.at(-2);
 
@@ -752,7 +799,7 @@ function validateOptionalSitemapFields(state: State, entry: UrlEntry, path: stri
 
   if (entry.priority !== undefined) {
     const priority = Number(entry.priority);
-    if (!/^(?:0(?:\.\d+)?|1(?:\.0+)?)$/.test(entry.priority) || Number.isNaN(priority) || priority < 0 || priority > 1) {
+    if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(entry.priority) || !Number.isFinite(priority) || priority < 0 || priority > 1) {
       addDiagnostic(state, {
         code: "INVALID_PRIORITY",
         severity: "error",

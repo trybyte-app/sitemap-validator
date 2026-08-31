@@ -51,6 +51,9 @@ export async function runCli(argv = process.argv.slice(2), io = {
         return report.evaluation.exitCode;
     }
     catch (error) {
+        if (isBrokenPipeError(error)) {
+            return 0;
+        }
         io.stderr.write(`${toErrorMessage(error)}\n`);
         if (error instanceof CliUsageError) {
             io.stderr.write("\n");
@@ -239,7 +242,9 @@ async function validateFromCliArgs(args) {
     });
     const summaries = [];
     const cliPolicy = createCliPolicy(args);
-    const policyEvaluator = createCiPolicyEvaluator(cliPolicy);
+    const policyEvaluator = createCiPolicyEvaluator(cliPolicy, {
+        maxFailingDiagnostics: collectDiagnostics ? undefined : 0,
+    });
     let setSummary;
     for await (const event of validateSitemapSetEvents(root.input, {
         sourceId: root.sourceId,
@@ -642,7 +647,15 @@ function formatTextReport(report, args) {
     }
     else {
         for (const group of report.diagnosticSummary.groups) {
-            lines.push(`[${group.severity}] ${group.code} x${group.count} (${group.source}): ${group.message}`);
+            const severity = group.varies?.includes("severity") === true
+                ? `mixed severity: ${group.counts.errors} errors, ${group.counts.warnings} warnings, ${group.counts.info} info`
+                : group.severity;
+            const code = group.varies?.includes("code") === true ? "multiple rule codes" : group.code;
+            const source = group.varies?.includes("source") === true ? "multiple rule sources" : group.source;
+            const message = group.varies?.includes("message") === true
+                ? `Multiple diagnostic messages are grouped here${group.examples.length > 0 ? "; see the examples below" : ""}.`
+                : group.message;
+            lines.push(`[${severity}] ${code} x${group.count} (${source}): ${message}`);
             if (args.detail === "grouped") {
                 for (const example of group.examples) {
                     lines.push(`  example${formatDiagnosticLocation(example)}: ${example.message}`);
@@ -698,9 +711,23 @@ function formatDiagnosticLocation(diagnostic) {
 function toErrorMessage(error) {
     return error instanceof Error ? error.message : String(error);
 }
+function isBrokenPipeError(error) {
+    return error instanceof Error
+        && "code" in error
+        && error.code === "EPIPE";
+}
 if (isMainModule(import.meta.url)) {
+    let stdoutPipeClosed = false;
+    process.stdout.on("error", (error) => {
+        if (isBrokenPipeError(error)) {
+            stdoutPipeClosed = true;
+            process.exitCode = 0;
+            return;
+        }
+        throw error;
+    });
     runCli().then((exitCode) => {
-        process.exitCode = exitCode;
+        process.exitCode = stdoutPipeClosed ? 0 : exitCode;
     }).catch((error) => {
         process.stderr.write(`${toErrorMessage(error)}\n`);
         process.exitCode = 1;

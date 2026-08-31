@@ -17,6 +17,7 @@ export declare const RULE_DEFINITIONS: {
     readonly INVALID_SITEMAP_NAMESPACE: RuleDefinition;
     readonly INVALID_ROOT_ELEMENT: RuleDefinition;
     readonly UNEXPECTED_SITEMAP_ELEMENT: RuleDefinition;
+    readonly SITEMAP_TEXT_UNEXPECTED: RuleDefinition;
     readonly SITEMAP_ELEMENT_DUPLICATE: RuleDefinition;
     readonly SITEMAP_ELEMENT_OUT_OF_ORDER: RuleDefinition;
     readonly SITEMAP_URL_LIMIT_EXCEEDED: RuleDefinition;
@@ -35,6 +36,7 @@ export declare const RULE_DEFINITIONS: {
     readonly URL_OUTSIDE_SITEMAP_PATH: RuleDefinition;
     readonly SITEMAP_ATTRIBUTE_UNEXPECTED: RuleDefinition;
     readonly SITEMAP_SET_SOURCE_LIMIT_EXCEEDED: RuleDefinition;
+    readonly SITEMAP_SET_DEPTH_LIMIT_EXCEEDED: RuleDefinition;
     readonly SITEMAP_CHILD_NOT_LOADED: RuleDefinition;
     readonly SITEMAP_CHILD_LOAD_FAILED: RuleDefinition;
     readonly URL_CONTROL_CHARACTER: RuleDefinition;

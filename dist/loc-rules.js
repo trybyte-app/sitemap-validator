@@ -1,7 +1,8 @@
 import { validateSitemapUrlValue } from "./url.js";
 const SITEMAP_LOC_MIN_LENGTH = 12;
 export function validateLocRule(state, context, value, path, source, options) {
-    if (source === "sitemaps.org" && value.length < SITEMAP_LOC_MIN_LENGTH) {
+    const characterLength = xmlCharacterLength(value);
+    if (source === "sitemaps.org" && characterLength < SITEMAP_LOC_MIN_LENGTH) {
         context.addDiagnostic({
             code: "LOC_TOO_SHORT",
             severity: "error",
@@ -11,7 +12,7 @@ export function validateLocRule(state, context, value, path, source, options) {
             spec: "https://www.sitemaps.org/schemas/sitemap/0.9/sitemap.xsd",
         });
     }
-    if (value.length > state.limits.maxLocLength) {
+    if (characterLength > state.limits.maxLocLength) {
         context.addDiagnostic({
             code: "LOC_TOO_LONG",
             severity: "error",
@@ -39,6 +40,9 @@ export function validateLocRule(state, context, value, path, source, options) {
         validateSitemapLocationConstraints(state, context, result.url, path);
     }
     return result.url;
+}
+function xmlCharacterLength(value) {
+    return Array.from(value).length;
 }
 export function validateSingleHostRule(state, context, url, path, kind) {
     if (!url) {

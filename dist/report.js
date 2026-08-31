@@ -148,7 +148,10 @@ export function createTextReport(result, options = {}) {
         if (group.omittedExamples > 0) {
             lines.push(`  ... ${group.omittedExamples} more occurrence${group.omittedExamples === 1 ? "" : "s"} in this group.`);
         }
-        if (options.includeSpecs && group.spec) {
+        if (options.includeSpecs && group.varies?.includes("spec") === true) {
+            lines.push("  spec: multiple specification links");
+        }
+        else if (options.includeSpecs && group.spec) {
             lines.push(`  spec: ${group.spec}`);
         }
     }
@@ -191,11 +194,22 @@ function createMutableSummaryGroup(key, diagnostic) {
         omittedSources: 0,
         firstLocation: diagnostic.location,
         spec: diagnostic.spec,
+        varies: new Set(),
     };
 }
 function addDiagnosticToSummaryGroup(group, diagnostic, maxExamplesPerGroup, maxSourcesPerGroup) {
     group.count += 1;
     incrementCounts(group.counts, diagnostic.severity);
+    if (diagnostic.code !== group.code)
+        group.varies.add("code");
+    if (diagnostic.severity !== group.severity)
+        group.varies.add("severity");
+    if (diagnostic.source !== group.source)
+        group.varies.add("source");
+    if (diagnostic.message !== group.message)
+        group.varies.add("message");
+    if (diagnostic.spec !== group.spec)
+        group.varies.add("spec");
     if (group.examples.length < maxExamplesPerGroup) {
         group.examples.push(diagnostic);
     }
@@ -228,6 +242,8 @@ function toDiagnosticSummaryGroup(group) {
         omittedSources: group.omittedSources,
         firstLocation: group.firstLocation,
         spec: group.spec,
+        varies: ["code", "severity", "source", "message", "spec"]
+            .filter((field) => group.varies.has(field)),
     };
 }
 function incrementCounts(counts, severity) {
@@ -239,7 +255,7 @@ function incrementCounts(counts, severity) {
         counts.info += 1;
 }
 function compareDiagnosticSummaryGroups(left, right) {
-    const severityDifference = getSeverityRank(left.severity) - getSeverityRank(right.severity);
+    const severityDifference = getGroupSeverityRank(left) - getGroupSeverityRank(right);
     if (severityDifference !== 0) {
         return severityDifference;
     }
@@ -248,6 +264,13 @@ function compareDiagnosticSummaryGroups(left, right) {
         return countDifference;
     }
     return left.code.localeCompare(right.code) || left.message.localeCompare(right.message);
+}
+function getGroupSeverityRank(group) {
+    if (group.counts.errors > 0)
+        return getSeverityRank("error");
+    if (group.counts.warnings > 0)
+        return getSeverityRank("warning");
+    return getSeverityRank("info");
 }
 function getSeverityRank(severity) {
     if (severity === "error")
@@ -269,7 +292,18 @@ function formatDiagnosticSummaryGroup(group) {
     const sourceSummary = group.sources.length === 0
         ? ""
         : ` sources=${group.sources.join(", ")}${group.omittedSources > 0 ? ` (+${group.omittedSources} more)` : ""}`;
-    return `[${group.severity}] ${group.code} x${group.count} (${group.source})${sourceSummary}: ${group.message}`;
+    const severity = group.varies?.includes("severity") === true
+        ? `mixed severity: ${formatDiagnosticCounts(group.counts)}`
+        : group.severity;
+    const code = group.varies?.includes("code") === true ? "multiple rule codes" : group.code;
+    const ruleSource = group.varies?.includes("source") === true ? "multiple rule sources" : group.source;
+    const message = group.varies?.includes("message") === true
+        ? `Multiple diagnostic messages are grouped here${group.examples.length > 0 ? "; see the examples below" : ""}.`
+        : group.message;
+    return `[${severity}] ${code} x${group.count} (${ruleSource})${sourceSummary}: ${message}`;
+}
+function formatDiagnosticCounts(counts) {
+    return `${counts.errors} errors, ${counts.warnings} warnings, ${counts.info} info`;
 }
 function formatDiagnosticLine(diagnostic, options) {
     const location = formatLocation(diagnostic);

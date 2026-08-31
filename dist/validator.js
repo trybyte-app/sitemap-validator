@@ -1,4 +1,4 @@
-import { ExtensionValidator, isExtensionNamespace, isValidCompleteW3cDateOrDateTime, shouldCollectExtensionText, } from "./extension-validation.js";
+import { ExtensionValidator, isElementOnlyExtensionContainer, isExtensionNamespace, isValidCompleteW3cDateOrDateTime, shouldCollectExtensionText, } from "./extension-validation.js";
 import { normalizeInput, readableForXml } from "./input.js";
 import { validateLocRule, validateSingleHostRule } from "./loc-rules.js";
 import { getRuleDefinition } from "./rules.js";
@@ -49,6 +49,16 @@ export async function* validateSitemapEvents(input, options = {}) {
     const decoder = new TextDecoder("utf-8", { fatal: true });
     let stopParsing = false;
     emit(state, { type: "source:start", sourceId: state.sourceId });
+    if (options.sitemapLocation !== undefined && !state.sitemapLocation) {
+        addDiagnostic(state, {
+            code: "INVALID_ABSOLUTE_URL",
+            severity: "error",
+            source: "rfc3986",
+            message: "sitemapLocation must be a valid absolute URL.",
+            spec: "https://www.rfc-editor.org/rfc/rfc3986",
+            context: { sitemapLocation: options.sitemapLocation },
+        });
+    }
     yield* drain(state);
     try {
         for await (const chunk of stream) {
@@ -84,6 +94,7 @@ export async function* validateSitemapEvents(input, options = {}) {
             parser.write(decoded);
             yield* drain(state);
         }
+        options.signal?.throwIfAborted();
         if (!stopParsing) {
             try {
                 const tail = decoder.decode();
@@ -107,6 +118,7 @@ export async function* validateSitemapEvents(input, options = {}) {
         }
     }
     catch (error) {
+        options.signal?.throwIfAborted();
         addDiagnostic(state, {
             code: "XML_PARSE_ERROR",
             severity: "error",
@@ -132,12 +144,12 @@ export async function* validateSitemapEvents(input, options = {}) {
 }
 function createState(sourceId, options, limits) {
     let sitemapLocation;
-    if (options.sitemapLocation) {
+    if (options.sitemapLocation !== undefined) {
         try {
             sitemapLocation = new URL(options.sitemapLocation);
         }
         catch {
-            // Reported through URL checks only when relevant.
+            // The validation event stream reports this option error after source:start.
         }
     }
     return {
@@ -216,11 +228,17 @@ function createParser(state) {
             if (current?.text !== undefined) {
                 current.text += text;
             }
+            else {
+                validateUnexpectedText(state, text, parser);
+            }
         },
         onCdata(text) {
             const current = state.stack.at(-1);
             if (current?.text !== undefined) {
                 current.text += text;
+            }
+            else {
+                validateUnexpectedText(state, text, parser);
             }
         },
         onDoctype() {
@@ -304,6 +322,9 @@ function validateElementPlacement(state, element, parser) {
         if (state.rootType === "sitemapindex" && !isAllowedSitemapIndexElement(parent.local, element.local)) {
             addDiagnostic(state, unexpectedElement(element.path, parser, state));
         }
+    }
+    else if (parent.uri === SITEMAP_NS && !(state.rootType === "urlset" && parent.local === "url")) {
+        addDiagnostic(state, unexpectedElement(element.path, parser, state));
     }
     state.extensions.validatePlacement(element, parent, state.stack.at(-3), extensionContext(state, parser));
 }
@@ -428,6 +449,29 @@ function shouldCollectText(element) {
             || element.local === "priority";
     }
     return shouldCollectExtensionText(element);
+}
+function validateUnexpectedText(state, text, parser) {
+    const current = state.stack.at(-1);
+    if (!current || text.trim().length === 0 || !isElementOnlyContainer(current)) {
+        return;
+    }
+    addDiagnostic(state, {
+        code: "SITEMAP_TEXT_UNEXPECTED",
+        severity: "error",
+        source: "sitemaps.org",
+        message: "Character data is not allowed in this element-only sitemap container.",
+        location: currentLocation(state, parser),
+        spec: "https://www.sitemaps.org/schemas/sitemap/0.9/sitemap.xsd",
+    });
+}
+function isElementOnlyContainer(element) {
+    if (element.uri === SITEMAP_NS) {
+        return element.local === "urlset"
+            || element.local === "sitemapindex"
+            || element.local === "url"
+            || element.local === "sitemap";
+    }
+    return isElementOnlyExtensionContainer(element);
 }
 function isCustomUrlExtensionElement(state, element) {
     const parent = state.stack.at(-2);
@@ -562,7 +606,7 @@ function validateOptionalSitemapFields(state, entry, path, parser) {
     }
     if (entry.priority !== undefined) {
         const priority = Number(entry.priority);
-        if (!/^(?:0(?:\.\d+)?|1(?:\.0+)?)$/.test(entry.priority) || Number.isNaN(priority) || priority < 0 || priority > 1) {
+        if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(entry.priority) || !Number.isFinite(priority) || priority < 0 || priority > 1) {
             addDiagnostic(state, {
                 code: "INVALID_PRIORITY",
                 severity: "error",

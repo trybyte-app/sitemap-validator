@@ -2,7 +2,7 @@
 
 Generated from `RULE_DEFINITIONS`. Run `npm run docs:rules` after changing rule codes, severities, sources, or spec links.
 
-Total rules: 134
+Total rules: 136
 
 | Code | Severity | Source | Spec |
 | --- | --- | --- | --- |
@@ -115,7 +115,9 @@ Total rules: 134
 | `SITEMAP_INDEX_LOC_REQUIRED` | error | sitemaps.org | [source](https://www.sitemaps.org/protocol.html) |
 | `SITEMAP_LOC_REQUIRED` | error | sitemaps.org | [source](https://www.sitemaps.org/protocol.html) |
 | `SITEMAP_MULTIPLE_HOSTS` | error | sitemaps.org | [source](https://www.sitemaps.org/protocol.html) |
+| `SITEMAP_SET_DEPTH_LIMIT_EXCEEDED` | error | sitemaps.org | [source](https://www.sitemaps.org/protocol.html) |
 | `SITEMAP_SET_SOURCE_LIMIT_EXCEEDED` | error | sitemaps.org | [source](https://www.sitemaps.org/protocol.html) |
+| `SITEMAP_TEXT_UNEXPECTED` | error | sitemaps.org | [source](https://www.sitemaps.org/protocol.html) |
 | `SITEMAP_URL_ENTRY_REQUIRED` | error | sitemaps.org | [source](https://www.sitemaps.org/protocol.html) |
 | `SITEMAP_URL_LIMIT_EXCEEDED` | error | sitemaps.org | [source](https://www.sitemaps.org/protocol.html) |
 | `UNEXPECTED_SITEMAP_ELEMENT` | error | sitemaps.org | [source](https://www.sitemaps.org/protocol.html) |

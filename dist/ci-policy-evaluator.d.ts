@@ -5,4 +5,8 @@ export interface CiPolicyEvaluator {
     addMany(diagnostics: readonly SitemapDiagnostic[]): void;
     evaluation(): CiEvaluation;
 }
-export declare function createCiPolicyEvaluator(policy: CiPolicy): CiPolicyEvaluator;
+interface CiPolicyEvaluatorOptions {
+    maxFailingDiagnostics?: number | undefined;
+}
+export declare function createCiPolicyEvaluator(policy: CiPolicy, options?: CiPolicyEvaluatorOptions): CiPolicyEvaluator;
+export {};

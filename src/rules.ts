@@ -32,6 +32,7 @@ export const RULE_DEFINITIONS = {
   INVALID_SITEMAP_NAMESPACE: rule("INVALID_SITEMAP_NAMESPACE", "error", "sitemaps.org", "Root sitemap namespace is invalid.", SITEMAP_SPEC),
   INVALID_ROOT_ELEMENT: rule("INVALID_ROOT_ELEMENT", "error", "sitemaps.org", "Root element must be urlset or sitemapindex.", SITEMAP_SPEC),
   UNEXPECTED_SITEMAP_ELEMENT: rule("UNEXPECTED_SITEMAP_ELEMENT", "error", "sitemaps.org", "Element is not allowed at this sitemap location.", SITEMAP_SPEC),
+  SITEMAP_TEXT_UNEXPECTED: rule("SITEMAP_TEXT_UNEXPECTED", "error", "sitemaps.org", "Character data is not allowed at this sitemap location.", SITEMAP_SPEC),
   SITEMAP_ELEMENT_DUPLICATE: rule("SITEMAP_ELEMENT_DUPLICATE", "error", "sitemaps.org", "Sitemap protocol element appears more than once.", SITEMAP_SPEC),
   SITEMAP_ELEMENT_OUT_OF_ORDER: rule("SITEMAP_ELEMENT_OUT_OF_ORDER", "error", "sitemaps.org", "Sitemap protocol element is out of schema order.", SITEMAP_SPEC),
   SITEMAP_URL_LIMIT_EXCEEDED: rule("SITEMAP_URL_LIMIT_EXCEEDED", "error", "sitemaps.org", "Sitemap URL entry limit exceeded.", SITEMAP_SPEC),
@@ -50,6 +51,7 @@ export const RULE_DEFINITIONS = {
   URL_OUTSIDE_SITEMAP_PATH: rule("URL_OUTSIDE_SITEMAP_PATH", "error", "sitemaps.org", "URL is outside the sitemap path prefix.", SITEMAP_SPEC),
   SITEMAP_ATTRIBUTE_UNEXPECTED: rule("SITEMAP_ATTRIBUTE_UNEXPECTED", "error", "sitemaps.org", "Sitemap protocol element has an unexpected attribute.", SITEMAP_SPEC),
   SITEMAP_SET_SOURCE_LIMIT_EXCEEDED: rule("SITEMAP_SET_SOURCE_LIMIT_EXCEEDED", "error", "sitemaps.org", "Sitemap set source limit exceeded.", SITEMAP_SPEC),
+  SITEMAP_SET_DEPTH_LIMIT_EXCEEDED: rule("SITEMAP_SET_DEPTH_LIMIT_EXCEEDED", "error", "sitemaps.org", "Sitemap set depth limit exceeded.", SITEMAP_SPEC),
   SITEMAP_CHILD_NOT_LOADED: rule("SITEMAP_CHILD_NOT_LOADED", "warning", "sitemaps.org", "Sitemap index child source was not loaded.", SITEMAP_SPEC),
   SITEMAP_CHILD_LOAD_FAILED: rule("SITEMAP_CHILD_LOAD_FAILED", "error", "sitemaps.org", "Sitemap index child loader failed.", SITEMAP_SPEC),
 

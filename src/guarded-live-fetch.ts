@@ -222,20 +222,135 @@ function isNonPublicIpv4(address: string): boolean {
 }
 
 function isNonPublicIpv6(address: string): boolean {
-  if (address.startsWith("::ffff:")) {
-    return isNonPublicIp(address.slice("::ffff:".length));
+  const value = parseIpv6Address(address);
+
+  if (value === undefined) {
+    return true;
   }
 
-  return address === "::"
-    || address === "::1"
-    || address.startsWith("fc")
-    || address.startsWith("fd")
-    || address.startsWith("fe8")
-    || address.startsWith("fe9")
-    || address.startsWith("fea")
-    || address.startsWith("feb")
-    || address.startsWith("ff")
-    || address.startsWith("2001:db8");
+  if (isIpv6InCidr(value, "::ffff:0:0", 96)) {
+    const embeddedIpv4 = Number(value & 0xffff_ffffn);
+    return isNonPublicIpv4([
+      embeddedIpv4 >>> 24,
+      (embeddedIpv4 >>> 16) & 0xff,
+      (embeddedIpv4 >>> 8) & 0xff,
+      embeddedIpv4 & 0xff,
+    ].join("."));
+  }
+
+  for (const [cidr, prefixLength, globallyReachable] of IPV6_SPECIAL_PURPOSE_POLICY) {
+    if (isIpv6InCidr(value, cidr, prefixLength)) {
+      return !globallyReachable;
+    }
+  }
+
+  return !isIpv6InCidr(value, "2000::", 3);
+}
+
+// Ordered from the most specific allocation to the least specific parent.
+// Values follow the IANA IPv6 Special-Purpose Address Space registry's
+// "Globally Reachable" field. N/A and expired allocations are treated as
+// non-public for guarded live fetches.
+const IPV6_SPECIAL_PURPOSE_POLICY: readonly (readonly [string, number, boolean])[] = [
+  ["::", 128, false],
+  ["::1", 128, false],
+  ["64:ff9b::", 96, true],
+  ["64:ff9b:1::", 48, false],
+  ["100::", 64, false],
+  ["100:0:0:1::", 64, false],
+  ["2001:1::1", 128, true],
+  ["2001:1::2", 128, true],
+  ["2001:1::3", 128, true],
+  ["2001:2::", 48, false],
+  ["2001:3::", 32, true],
+  ["2001:4:112::", 48, true],
+  ["2001:10::", 28, false],
+  ["2001:20::", 28, true],
+  ["2001:30::", 28, true],
+  ["2001::", 32, false],
+  ["2001::", 23, false],
+  ["2001:db8::", 32, false],
+  ["2002::", 16, false],
+  ["3fff::", 20, false],
+  ["5f00::", 16, false],
+  ["fc00::", 7, false],
+  ["fe80::", 10, false],
+  ["ff00::", 8, false],
+];
+
+function isIpv6InCidr(value: bigint, cidrAddress: string, prefixLength: number): boolean {
+  const cidrValue = parseIpv6Address(cidrAddress);
+
+  if (cidrValue === undefined) {
+    return false;
+  }
+
+  const shift = BigInt(128 - prefixLength);
+  return (value >> shift) === (cidrValue >> shift);
+}
+
+function parseIpv6Address(address: string): bigint | undefined {
+  const sections = address.split("::");
+
+  if (sections.length > 2) {
+    return undefined;
+  }
+
+  const left = parseIpv6Sections(sections[0] ?? "");
+  const right = parseIpv6Sections(sections[1] ?? "");
+
+  if (!left || !right) {
+    return undefined;
+  }
+
+  const omittedCount = sections.length === 2 ? 8 - left.length - right.length : 0;
+
+  if (omittedCount < 0 || (sections.length === 1 && left.length !== 8)) {
+    return undefined;
+  }
+
+  const words = [...left, ...Array<number>(omittedCount).fill(0), ...right];
+
+  if (words.length !== 8) {
+    return undefined;
+  }
+
+  return words.reduce((value, word) => (value << 16n) | BigInt(word), 0n);
+}
+
+function parseIpv6Sections(value: string): number[] | undefined {
+  if (value.length === 0) {
+    return [];
+  }
+
+  const sections = value.split(":");
+  const words: number[] = [];
+
+  for (const [index, section] of sections.entries()) {
+    if (section.includes(".")) {
+      if (index !== sections.length - 1) {
+        return undefined;
+      }
+
+      const octets = section.split(".").map(Number);
+
+      if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
+        return undefined;
+      }
+
+      words.push(((octets[0] ?? 0) << 8) | (octets[1] ?? 0));
+      words.push(((octets[2] ?? 0) << 8) | (octets[3] ?? 0));
+      continue;
+    }
+
+    if (!/^[0-9a-f]{1,4}$/i.test(section)) {
+      return undefined;
+    }
+
+    words.push(Number.parseInt(section, 16));
+  }
+
+  return words;
 }
 
 function isRedirectStatus(status: number): boolean {

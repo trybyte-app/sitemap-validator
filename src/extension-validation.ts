@@ -394,7 +394,7 @@ export class ExtensionValidator {
       }
     }
     if (entry.publicationLanguage !== undefined && !isValidGoogleNewsLanguage(entry.publicationLanguage)) this.#add(context, "GOOGLE_NEWS_LANGUAGE_INVALID", "news:language should be a valid-looking ISO language code.", `${entry.path}/news:publication/news:language`, NEWS_SPEC);
-    if (entry.title !== undefined && entry.title.length > 110) this.#add(context, "GOOGLE_NEWS_TITLE_TOO_LONG", "news:title should be concise and no more than 110 characters.", `${entry.path}/news:title`, NEWS_SPEC, "warning");
+    if (entry.title !== undefined && xmlCharacterLength(entry.title) > 110) this.#add(context, "GOOGLE_NEWS_TITLE_TOO_LONG", "news:title should be concise and no more than 110 characters.", `${entry.path}/news:title`, NEWS_SPEC, "warning");
     if (entry.access !== undefined && entry.access !== "Subscription" && entry.access !== "Registration") this.#add(context, "GOOGLE_NEWS_ACCESS_INVALID", "news:access must be Subscription or Registration when the legacy XSD field is used.", `${entry.path}/news:access`, NEWS_XSD);
     if (entry.genres !== undefined && !isValidGoogleNewsGenres(entry.genres)) this.#add(context, "GOOGLE_NEWS_GENRES_INVALID", "news:genres must contain comma-separated values from the Google News XSD genre list.", `${entry.path}/news:genres`, NEWS_XSD);
     if (entry.stockTickers !== undefined && !isValidGoogleNewsStockTickers(entry.stockTickers)) this.#add(context, "GOOGLE_NEWS_STOCK_TICKERS_INVALID", "news:stock_tickers must contain up to five comma-separated exchange:ticker values.", `${entry.path}/news:stock_tickers`, NEWS_XSD);
@@ -487,10 +487,10 @@ export class ExtensionValidator {
     if (entry.contentLoc !== undefined && hasUnsupportedVideoContentLocFormat(entry.contentLoc)) this.#add(context, "GOOGLE_VIDEO_CONTENT_LOC_FORMAT_UNSUPPORTED", "video:content_loc should point directly to a supported video file, not an HTML page or Flash file.", `${entry.path}/video:content_loc`, VIDEO_SPEC);
     if (entry.contentSegmentLocCount > 0 && !entry.playerLoc) this.#add(context, "GOOGLE_VIDEO_CONTENT_SEGMENT_REQUIRES_PLAYER_LOC", "video:content_segment_loc can be used only in conjunction with video:player_loc.", `${entry.path}/video:content_segment_loc`, VIDEO_XSD);
     if (entry.playerLoc !== undefined && entry.playerLoc === parentUrlLoc) this.#add(context, "GOOGLE_VIDEO_PLAYER_LOC_EQUALS_PAGE_LOC", "video:player_loc must not be the same URL as the parent page loc.", `${entry.path}/video:player_loc`, VIDEO_SPEC);
-    if (entry.title !== undefined && entry.title.length > 100) this.#add(context, "GOOGLE_VIDEO_TITLE_TOO_LONG", "video:title must be no more than 100 characters.", `${entry.path}/video:title`, VIDEO_XSD);
-    if (entry.description !== undefined && entry.description.length > 2_048) this.#add(context, "GOOGLE_VIDEO_DESCRIPTION_TOO_LONG", "video:description must be no more than 2048 characters.", `${entry.path}/video:description`, VIDEO_SPEC);
+    if (entry.title !== undefined && xmlCharacterLength(entry.title) > 100) this.#add(context, "GOOGLE_VIDEO_TITLE_TOO_LONG", "video:title must be no more than 100 characters.", `${entry.path}/video:title`, VIDEO_XSD);
+    if (entry.description !== undefined && xmlCharacterLength(entry.description) > 2_048) this.#add(context, "GOOGLE_VIDEO_DESCRIPTION_TOO_LONG", "video:description must be no more than 2048 characters.", `${entry.path}/video:description`, VIDEO_SPEC);
     if (entry.duration !== undefined && (!/^(?:[1-9]\d*)$/.test(entry.duration) || Number(entry.duration) > 28_800)) this.#add(context, "GOOGLE_VIDEO_DURATION_INVALID", "video:duration must be an integer number of seconds from 1 to 28800.", `${entry.path}/video:duration`, VIDEO_SPEC);
-    if (entry.category !== undefined && entry.category.length > 256) this.#add(context, "GOOGLE_VIDEO_CATEGORY_TOO_LONG", "video:category must be no more than 256 characters when the legacy XSD field is used.", `${entry.path}/video:category`, VIDEO_XSD);
+    if (entry.category !== undefined && xmlCharacterLength(entry.category) > 256) this.#add(context, "GOOGLE_VIDEO_CATEGORY_TOO_LONG", "video:category must be no more than 256 characters when the legacy XSD field is used.", `${entry.path}/video:category`, VIDEO_XSD);
     if (entry.rating !== undefined && (entry.rating.length === 0 || Number.isNaN(Number(entry.rating)) || Number(entry.rating) < 0 || Number(entry.rating) > 5)) this.#add(context, "GOOGLE_VIDEO_RATING_INVALID", "video:rating must be a number from 0.0 to 5.0.", `${entry.path}/video:rating`, VIDEO_SPEC);
     if (entry.viewCount !== undefined && (!/^\d+$/.test(entry.viewCount) || Number(entry.viewCount) < 0)) this.#add(context, "GOOGLE_VIDEO_VIEW_COUNT_INVALID", "video:view_count must be a non-negative integer.", `${entry.path}/video:view_count`, VIDEO_SPEC);
     if (entry.familyFriendly !== undefined && !isVideoYesNo(entry.familyFriendly)) this.#add(context, "GOOGLE_VIDEO_FAMILY_FRIENDLY_INVALID", "video:family_friendly must be yes or no, using a case variant allowed by the video sitemap XSD.", `${entry.path}/video:family_friendly`, VIDEO_SPEC);
@@ -500,7 +500,7 @@ export class ExtensionValidator {
     if (entry.restrictionValue !== undefined && !isSpaceSeparatedIso3166List(entry.restrictionValue)) this.#add(context, "GOOGLE_VIDEO_RESTRICTION_COUNTRY_INVALID", "video:restriction must contain a space-delimited list of ISO 3166 alpha-2 country codes.", `${entry.path}/video:restriction`, VIDEO_SPEC);
     this.#validateRelationship(entry.platformRelationship, entry.platformValue, "platform", "GOOGLE_VIDEO_PLATFORM_RELATIONSHIP_INVALID", context, entry.path);
     if (entry.platformValue !== undefined && !isSpaceSeparatedVideoPlatformList(entry.platformValue)) this.#add(context, "GOOGLE_VIDEO_PLATFORM_VALUE_INVALID", "video:platform must contain web, mobile, tv, or a space-delimited combination of those values.", `${entry.path}/video:platform`, VIDEO_SPEC);
-    if (entry.uploader !== undefined && entry.uploader.length > 255) this.#add(context, "GOOGLE_VIDEO_UPLOADER_TOO_LONG", "video:uploader must be no more than 255 characters.", `${entry.path}/video:uploader`, VIDEO_SPEC);
+    if (entry.uploader !== undefined && xmlCharacterLength(entry.uploader) > 255) this.#add(context, "GOOGLE_VIDEO_UPLOADER_TOO_LONG", "video:uploader must be no more than 255 characters.", `${entry.path}/video:uploader`, VIDEO_SPEC);
     if (entry.uploaderInfo !== undefined) {
       context.validateLoc(entry.uploaderInfo, `${entry.path}/video:uploader/@info`, { enforceSitemapLocation: false });
       if (parentUrlLoc && !hasSameHostname(entry.uploaderInfo, parentUrlLoc)) this.#add(context, "GOOGLE_VIDEO_UPLOADER_INFO_DOMAIN_INVALID", "video:uploader info must be on the same domain as the parent page loc.", `${entry.path}/video:uploader/@info`, VIDEO_SPEC);
@@ -655,25 +655,45 @@ export function shouldCollectExtensionText(element: Pick<ExtensionElement, "loca
   return element.uri === PAGEMAP_NS && element.local === "Attribute";
 }
 
+export function isElementOnlyExtensionContainer(element: Pick<ExtensionElement, "local" | "uri">): boolean {
+  if (element.uri === IMAGE_NS) return element.local === "image";
+  if (element.uri === NEWS_NS) return element.local === "news" || element.local === "publication";
+  if (element.uri === VIDEO_NS) return element.local === "video" || element.local === "tvshow";
+  if (element.uri === PAGEMAP_NS) {
+    return element.local === "PageMap" || element.local === "Template" || element.local === "DataObject";
+  }
+  return element.uri === XHTML_NS && element.local === "link";
+}
+
 export interface DateTimeValidationOptions {
   requireTimeSeconds?: boolean;
 }
 
 export function isValidCompleteW3cDateOrDateTime(value: string, options: DateTimeValidationOptions = {}): boolean {
   const date = /^(\d{4})-(\d{2})-(\d{2})$/;
-  const dateTime = options.requireTimeSeconds
-    ? /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
-    : /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
-  const match = date.exec(value) ?? dateTime.exec(value);
+  const dateTime = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|([+-])(\d{2}):(\d{2}))$/;
+  const dateMatch = date.exec(value);
+  const dateTimeMatch = dateTime.exec(value);
+  const match = dateMatch ?? dateTimeMatch;
   if (!match || Number.isNaN(Date.parse(value))) return false;
+  if (options.requireTimeSeconds && dateTimeMatch && dateTimeMatch[6] === undefined) return false;
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
   const hour = match[4] === undefined ? 0 : Number(match[4]);
   const minute = match[5] === undefined ? 0 : Number(match[5]);
   const second = match[6] === undefined ? 0 : Number(match[6]);
-  if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return false;
+  if (year === 0 || month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return false;
+  if (dateTimeMatch && dateTimeMatch[7] !== "Z") {
+    const timezoneHour = Number(dateTimeMatch[9]);
+    const timezoneMinute = Number(dateTimeMatch[10]);
+    if (timezoneHour > 14 || timezoneMinute > 59 || (timezoneHour === 14 && timezoneMinute !== 0)) return false;
+  }
   return day >= 1 && day <= new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function xmlCharacterLength(value: string): number {
+  return Array.from(value).length;
 }
 
 function isValidNewsPlacement(local: string, parent: ExtensionElement, grandparent: ExtensionElement | undefined): boolean {

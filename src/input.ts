@@ -133,16 +133,23 @@ function createDecompressionStream(chunks: AsyncIterable<Uint8Array>): AsyncIter
     return undefined;
   }
 
+  const iterator = chunks[Symbol.asyncIterator]();
   const input = new ReadableStream<Uint8Array>({
-    async start(controller): Promise<void> {
+    async pull(controller): Promise<void> {
       try {
-        for await (const chunk of chunks) {
-          controller.enqueue(chunk);
+        const result = await iterator.next();
+        if (result.done) {
+          controller.close();
+          return;
         }
-        controller.close();
+
+        controller.enqueue(result.value);
       } catch (error) {
         controller.error(error);
       }
+    },
+    async cancel(): Promise<void> {
+      await iterator.return?.();
     },
   });
 
@@ -161,7 +168,11 @@ async function* streamToAsyncIterable(stream: ReadableStream<Uint8Array>): Async
       yield result.value;
     }
   } finally {
-    reader.releaseLock();
+    try {
+      await reader.cancel();
+    } finally {
+      reader.releaseLock();
+    }
   }
 }
 

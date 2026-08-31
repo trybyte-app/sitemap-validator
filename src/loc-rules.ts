@@ -28,7 +28,9 @@ export function validateLocRule(
   source: "sitemaps.org" | "google",
   options: LocValidationOptions,
 ): URL | undefined {
-  if (source === "sitemaps.org" && value.length < SITEMAP_LOC_MIN_LENGTH) {
+  const characterLength = xmlCharacterLength(value);
+
+  if (source === "sitemaps.org" && characterLength < SITEMAP_LOC_MIN_LENGTH) {
     context.addDiagnostic({
       code: "LOC_TOO_SHORT",
       severity: "error",
@@ -39,7 +41,7 @@ export function validateLocRule(
     });
   }
 
-  if (value.length > state.limits.maxLocLength) {
+  if (characterLength > state.limits.maxLocLength) {
     context.addDiagnostic({
       code: "LOC_TOO_LONG",
       severity: "error",
@@ -71,6 +73,10 @@ export function validateLocRule(
   }
 
   return result.url;
+}
+
+function xmlCharacterLength(value: string): number {
+  return Array.from(value).length;
 }
 
 export function validateSingleHostRule(

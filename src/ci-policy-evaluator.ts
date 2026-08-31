@@ -7,11 +7,17 @@ export interface CiPolicyEvaluator {
   evaluation(): CiEvaluation;
 }
 
-export function createCiPolicyEvaluator(policy: CiPolicy): CiPolicyEvaluator {
+interface CiPolicyEvaluatorOptions {
+  maxFailingDiagnostics?: number | undefined;
+}
+
+export function createCiPolicyEvaluator(policy: CiPolicy, options: CiPolicyEvaluatorOptions = {}): CiPolicyEvaluator {
   const failOn = new Set(policy.failOn ?? ["error"]);
   const failOnRules = new Set(policy.failOnRules ?? []);
   const allowRules = new Set(policy.allowRules ?? []);
+  const maxFailingDiagnostics = options.maxFailingDiagnostics ?? Number.POSITIVE_INFINITY;
   const failingDiagnostics: SitemapDiagnostic[] = [];
+  let failingDiagnosticCount = 0;
   let warnings = 0;
   let errors = 0;
 
@@ -30,7 +36,11 @@ export function createCiPolicyEvaluator(policy: CiPolicy): CiPolicyEvaluator {
       }
 
       if (failOn.has(diagnostic.severity) || failOnRules.has(diagnostic.code)) {
-        failingDiagnostics.push(diagnostic);
+        failingDiagnosticCount += 1;
+
+        if (failingDiagnostics.length < maxFailingDiagnostics) {
+          failingDiagnostics.push(diagnostic);
+        }
       }
     },
     addMany(diagnostics): void {
@@ -40,10 +50,10 @@ export function createCiPolicyEvaluator(policy: CiPolicy): CiPolicyEvaluator {
     },
     evaluation(): CiEvaluation {
       const warningLimitExceeded = policy.maxWarnings !== undefined && warnings > policy.maxWarnings;
-      const passed = failingDiagnostics.length === 0 && !warningLimitExceeded;
+      const passed = failingDiagnosticCount === 0 && !warningLimitExceeded;
       const failureReasons = [
-        failingDiagnostics.length > 0
-          ? `${failingDiagnostics.length} diagnostic${failingDiagnostics.length === 1 ? "" : "s"} matched the CI failure policy.`
+        failingDiagnosticCount > 0
+          ? `${failingDiagnosticCount} diagnostic${failingDiagnosticCount === 1 ? "" : "s"} matched the CI failure policy.`
           : undefined,
         warningLimitExceeded
           ? `Warning count ${warnings} exceeded the configured maxWarnings ${policy.maxWarnings}.`

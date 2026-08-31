@@ -10,7 +10,8 @@ import { createInterface } from "node:readline";
 import { finished } from "node:stream/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ParsedRobots } from "@trybyte/robotstxt-parser";
-import { evaluateForCi, resolveCiPolicy } from "./ci.js";
+import { createCiPolicyEvaluator } from "./ci-policy-evaluator.js";
+import { resolveCiPolicy } from "./ci.js";
 import { createGuardedLiveFetcher } from "./guarded-live-fetch.js";
 import { createLiveUrlDatasetCollector, LiveUrlDatasetError, openLiveUrlDataset, } from "./live-url-dataset.js";
 import { createLocalSitemapLoader } from "./loaders.js";
@@ -91,6 +92,9 @@ export async function runLiveCli(argv = process.argv.slice(2), io = { stdout: pr
         return report.evaluation.exitCode;
     }
     catch (error) {
+        if (isBrokenPipeError(error)) {
+            return 0;
+        }
         io.stderr.write(`${toErrorMessage(error)}\n`);
         if (error instanceof LiveCliUsageError || error instanceof LiveUrlDatasetError) {
             io.stderr.write("\n");
@@ -387,6 +391,9 @@ export function parseLiveCliArgs(argv) {
     if (args.urlsFile && args.target) {
         throw new LiveCliUsageError("Pass either a sitemap URL/file target or --urls-file, not both.");
     }
+    if (args.urlsFile && (args.saveUrls || args.saveUrlDetails)) {
+        throw new LiveCliUsageError("--save-urls and --save-url-details cannot be used with --urls-file because that input is already a saved live URL dataset.");
+    }
     if (args.auditConcurrency < 1 || args.loaderConcurrency < 1) {
         throw new LiveCliUsageError("Concurrency values must be at least 1.");
     }
@@ -442,11 +449,15 @@ async function validateSitemapTargetAndCollectUrls(args, liveFetcher, logger) {
         saveUrlDetailsTo: args.saveUrlDetails,
         replayable: needsReplayableUrls,
     });
+    const collectDiagnostics = args.detail === "full";
     const diagnostics = [];
     const sourceSummaries = [];
     const diagnosticSummaryBuilder = createDiagnosticSummaryBuilder({
         maxGroups: args.detail === "summary" ? 10 : 50,
         maxExamplesPerGroup: args.detail === "summary" ? 0 : 3,
+    });
+    const xmlPolicyEvaluator = createCiPolicyEvaluator(createXmlPolicy(args), {
+        maxFailingDiagnostics: collectDiagnostics ? undefined : 0,
     });
     let summary;
     let collectedUrls = 0;
@@ -473,8 +484,11 @@ async function validateSitemapTargetAndCollectUrls(args, liveFetcher, logger) {
                 }
             }
             if (event.type === "diagnostic") {
-                diagnostics.push(event.diagnostic);
                 diagnosticSummaryBuilder.add(event.diagnostic);
+                xmlPolicyEvaluator.add(event.diagnostic);
+                if (collectDiagnostics) {
+                    diagnostics.push(event.diagnostic);
+                }
             }
             if (event.type === "source:discover") {
                 discoveredSources += 1;
@@ -498,14 +512,8 @@ async function validateSitemapTargetAndCollectUrls(args, liveFetcher, logger) {
         await urlDatasetCollector.close();
         throw error;
     }
-    const setSummary = summary ?? createFallbackSummary(sourceSummaries, diagnostics);
-    const result = {
-        valid: setSummary.valid,
-        diagnostics,
-        summaries: sourceSummaries,
-        summary: setSummary,
-    };
-    const xmlPolicy = createXmlPolicy(args);
+    const diagnosticSummary = diagnosticSummaryBuilder.summary();
+    const setSummary = summary ?? createFallbackSummary(sourceSummaries, diagnosticSummary.counts);
     const finalizedDataset = await urlDatasetCollector.finish();
     logger.info(`XML validation finished: ${formatCount(setSummary.sources)} sitemap source${setSummary.sources === 1 ? "" : "s"}, ${formatCount(setSummary.urls)} URLs, ${setSummary.diagnostics.errors} errors, ${setSummary.diagnostics.warnings} warnings.`);
     if (args.saveUrls) {
@@ -520,9 +528,9 @@ async function validateSitemapTargetAndCollectUrls(args, liveFetcher, logger) {
             validationSkipped: false,
             summary: setSummary,
             sourceSummaries,
-            diagnosticSummary: diagnosticSummaryBuilder.summary(),
+            diagnosticSummary,
             diagnostics,
-            evaluation: evaluateForCi(result, xmlPolicy),
+            evaluation: xmlPolicyEvaluator.evaluation(),
         },
     };
 }
@@ -1086,7 +1094,7 @@ async function auditPageBody(record, args, liveFetcher) {
         findings.push(...auditCanonical(record, headers, html, args.requireCanonical, finalUrl, redirects));
     }
     if (args.checkNoindex) {
-        findings.push(...auditNoindex(record, headers, html, finalUrl, redirects));
+        findings.push(...auditNoindex(record, headers, html, finalUrl, redirects, args.robotsUserAgent));
     }
     return findings;
 }
@@ -1139,10 +1147,10 @@ function auditCanonical(record, headers, html, requireCanonical, finalUrl, redir
     }
     return findings;
 }
-function auditNoindex(record, headers, html, finalUrl, redirects) {
+function auditNoindex(record, headers, html, finalUrl, redirects, robotsUserAgent) {
     const url = record.url;
     const header = headers.get("x-robots-tag");
-    if (containsNoindex(header) || htmlHasNoindex(html)) {
+    if (xRobotsTagHasNoindex(header, robotsUserAgent) || htmlHasNoindex(html, robotsUserAgent)) {
         return [{
                 code: "LIVE_NOINDEX",
                 severity: "warning",
@@ -1181,7 +1189,8 @@ function extractCanonicalFromHtml(html) {
     const canonicals = [];
     const linkPattern = /<link\b[^>]*>/gi;
     let match;
-    while ((match = linkPattern.exec(html)) !== null) {
+    const markup = stripHtmlCommentsAndRawText(html);
+    while ((match = linkPattern.exec(markup)) !== null) {
         const tag = match[0];
         const attrs = parseTagAttributes(tag);
         const rel = attrs.get("rel")?.toLowerCase();
@@ -1192,19 +1201,24 @@ function extractCanonicalFromHtml(html) {
     }
     return canonicals;
 }
-function htmlHasNoindex(html) {
+function htmlHasNoindex(html, robotsUserAgent) {
     const metaPattern = /<meta\b[^>]*>/gi;
     let match;
-    while ((match = metaPattern.exec(html)) !== null) {
+    const markup = stripHtmlCommentsAndRawText(html);
+    const normalizedUserAgent = robotsUserAgent.trim().toLowerCase();
+    while ((match = metaPattern.exec(markup)) !== null) {
         const attrs = parseTagAttributes(match[0]);
         const name = attrs.get("name")?.toLowerCase();
         const httpEquiv = attrs.get("http-equiv")?.toLowerCase();
         const content = attrs.get("content");
-        if ((name === "robots" || name === "googlebot" || httpEquiv === "x-robots-tag") && containsNoindex(content)) {
+        if ((name === "robots" || name === normalizedUserAgent || httpEquiv === "x-robots-tag") && containsNoindex(content)) {
             return true;
         }
     }
     return false;
+}
+function stripHtmlCommentsAndRawText(html) {
+    return html.replace(/<!--[\s\S]*?(?:-->|$)|<(script|style)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi, "");
 }
 function parseTagAttributes(tag) {
     const attrs = new Map();
@@ -1276,13 +1290,13 @@ function formatJsonLiveReport(report, args) {
     if (args.detail === "full") {
         return report;
     }
-    const { diagnostics, ...xml } = report.xml;
+    const { diagnostics: _diagnostics, ...xml } = report.xml;
     const { findings, ...audits } = report.audits;
     return {
         ...report,
         xml: {
             ...xml,
-            omittedDiagnostics: diagnostics.length,
+            omittedDiagnostics: report.xml.diagnosticSummary.total,
         },
         audits: {
             ...audits,
@@ -1345,16 +1359,7 @@ function createSkippedXmlReport() {
         evaluation: undefined,
     };
 }
-function createFallbackSummary(summaries, diagnostics) {
-    const counts = diagnostics.reduce((total, diagnostic) => {
-        if (diagnostic.severity === "error")
-            total.errors += 1;
-        if (diagnostic.severity === "warning")
-            total.warnings += 1;
-        if (diagnostic.severity === "info")
-            total.info += 1;
-        return total;
-    }, { errors: 0, warnings: 0, info: 0 });
+function createFallbackSummary(summaries, counts) {
     return {
         valid: counts.errors === 0 && summaries.every((summary) => summary.valid),
         sources: summaries.length,
@@ -1433,6 +1438,34 @@ function parseUrl(value) {
 function containsNoindex(value) {
     return value?.toLowerCase().split(",").some((part) => part.trim() === "noindex") ?? false;
 }
+function xRobotsTagHasNoindex(value, robotsUserAgent) {
+    if (!value) {
+        return false;
+    }
+    const normalizedUserAgent = robotsUserAgent.trim().toLowerCase();
+    let activeScope;
+    for (const part of value.split(",")) {
+        let directive = part.trim().toLowerCase();
+        const scopeSeparator = directive.indexOf(":");
+        if (scopeSeparator >= 0) {
+            const prefix = directive.slice(0, scopeSeparator).trim();
+            if (!ROBOTS_DIRECTIVES_WITH_COLON_VALUES.has(prefix)) {
+                activeScope = prefix;
+                directive = directive.slice(scopeSeparator + 1).trim();
+            }
+        }
+        if (directive === "noindex" && (activeScope === undefined || activeScope === normalizedUserAgent)) {
+            return true;
+        }
+    }
+    return false;
+}
+const ROBOTS_DIRECTIVES_WITH_COLON_VALUES = new Set([
+    "max-image-preview",
+    "max-snippet",
+    "max-video-preview",
+    "unavailable_after",
+]);
 function uniqueList(values) {
     return [...new Set(values)];
 }
@@ -1526,8 +1559,8 @@ XML validation options:
   --loader-concurrency <n>          Child sitemap load concurrency. Default: ${DEFAULT_LOADER_CONCURRENCY}.
 
 URL list options:
-  --save-urls <file>                Save collected sitemap URLs, one per line.
-  --save-url-details <file>         Save JSONL records with each URL and source sitemap.
+  --save-urls <file>                Save collected sitemap URLs, one per line. Not valid with --urls-file.
+  --save-url-details <file>         Save JSONL records with each URL and source sitemap. Not valid with --urls-file.
   --urls-file <file>                Run audits from a saved URL list; skips XML validation.
 
 Opt-in live audit options:
@@ -1688,9 +1721,23 @@ function resolveLocalPath(target) {
 function toErrorMessage(error) {
     return error instanceof Error ? error.message : String(error);
 }
+function isBrokenPipeError(error) {
+    return error instanceof Error
+        && "code" in error
+        && error.code === "EPIPE";
+}
 if (isMainModule(import.meta.url)) {
+    let stdoutPipeClosed = false;
+    process.stdout.on("error", (error) => {
+        if (isBrokenPipeError(error)) {
+            stdoutPipeClosed = true;
+            process.exitCode = 0;
+            return;
+        }
+        throw error;
+    });
     runLiveCli().then((code) => {
-        process.exitCode = code;
+        process.exitCode = stdoutPipeClosed ? 0 : code;
     }).catch((error) => {
         console.error(error);
         process.exitCode = 1;

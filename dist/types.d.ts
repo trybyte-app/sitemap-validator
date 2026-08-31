@@ -119,6 +119,7 @@ export interface SitemapLoadRequest {
     loc: string;
     parentSourceId: string;
     depth: number;
+    signal?: AbortSignal | undefined;
 }
 export interface SitemapLoadedSource {
     input: SitemapInput;

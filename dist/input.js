@@ -86,17 +86,23 @@ function createDecompressionStream(chunks) {
     if (!DecompressionStreamConstructor) {
         return undefined;
     }
+    const iterator = chunks[Symbol.asyncIterator]();
     const input = new ReadableStream({
-        async start(controller) {
+        async pull(controller) {
             try {
-                for await (const chunk of chunks) {
-                    controller.enqueue(chunk);
+                const result = await iterator.next();
+                if (result.done) {
+                    controller.close();
+                    return;
                 }
-                controller.close();
+                controller.enqueue(result.value);
             }
             catch (error) {
                 controller.error(error);
             }
+        },
+        async cancel() {
+            await iterator.return?.();
         },
     });
     return streamToAsyncIterable(input.pipeThrough(new DecompressionStreamConstructor("gzip")));
@@ -113,7 +119,12 @@ async function* streamToAsyncIterable(stream) {
         }
     }
     finally {
-        reader.releaseLock();
+        try {
+            await reader.cancel();
+        }
+        finally {
+            reader.releaseLock();
+        }
     }
 }
 function isAsyncIterable(value) {

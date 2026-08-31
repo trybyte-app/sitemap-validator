@@ -291,7 +291,7 @@ export class ExtensionValidator {
         }
         if (entry.publicationLanguage !== undefined && !isValidGoogleNewsLanguage(entry.publicationLanguage))
             this.#add(context, "GOOGLE_NEWS_LANGUAGE_INVALID", "news:language should be a valid-looking ISO language code.", `${entry.path}/news:publication/news:language`, NEWS_SPEC);
-        if (entry.title !== undefined && entry.title.length > 110)
+        if (entry.title !== undefined && xmlCharacterLength(entry.title) > 110)
             this.#add(context, "GOOGLE_NEWS_TITLE_TOO_LONG", "news:title should be concise and no more than 110 characters.", `${entry.path}/news:title`, NEWS_SPEC, "warning");
         if (entry.access !== undefined && entry.access !== "Subscription" && entry.access !== "Registration")
             this.#add(context, "GOOGLE_NEWS_ACCESS_INVALID", "news:access must be Subscription or Registration when the legacy XSD field is used.", `${entry.path}/news:access`, NEWS_XSD);
@@ -404,13 +404,13 @@ export class ExtensionValidator {
             this.#add(context, "GOOGLE_VIDEO_CONTENT_SEGMENT_REQUIRES_PLAYER_LOC", "video:content_segment_loc can be used only in conjunction with video:player_loc.", `${entry.path}/video:content_segment_loc`, VIDEO_XSD);
         if (entry.playerLoc !== undefined && entry.playerLoc === parentUrlLoc)
             this.#add(context, "GOOGLE_VIDEO_PLAYER_LOC_EQUALS_PAGE_LOC", "video:player_loc must not be the same URL as the parent page loc.", `${entry.path}/video:player_loc`, VIDEO_SPEC);
-        if (entry.title !== undefined && entry.title.length > 100)
+        if (entry.title !== undefined && xmlCharacterLength(entry.title) > 100)
             this.#add(context, "GOOGLE_VIDEO_TITLE_TOO_LONG", "video:title must be no more than 100 characters.", `${entry.path}/video:title`, VIDEO_XSD);
-        if (entry.description !== undefined && entry.description.length > 2_048)
+        if (entry.description !== undefined && xmlCharacterLength(entry.description) > 2_048)
             this.#add(context, "GOOGLE_VIDEO_DESCRIPTION_TOO_LONG", "video:description must be no more than 2048 characters.", `${entry.path}/video:description`, VIDEO_SPEC);
         if (entry.duration !== undefined && (!/^(?:[1-9]\d*)$/.test(entry.duration) || Number(entry.duration) > 28_800))
             this.#add(context, "GOOGLE_VIDEO_DURATION_INVALID", "video:duration must be an integer number of seconds from 1 to 28800.", `${entry.path}/video:duration`, VIDEO_SPEC);
-        if (entry.category !== undefined && entry.category.length > 256)
+        if (entry.category !== undefined && xmlCharacterLength(entry.category) > 256)
             this.#add(context, "GOOGLE_VIDEO_CATEGORY_TOO_LONG", "video:category must be no more than 256 characters when the legacy XSD field is used.", `${entry.path}/video:category`, VIDEO_XSD);
         if (entry.rating !== undefined && (entry.rating.length === 0 || Number.isNaN(Number(entry.rating)) || Number(entry.rating) < 0 || Number(entry.rating) > 5))
             this.#add(context, "GOOGLE_VIDEO_RATING_INVALID", "video:rating must be a number from 0.0 to 5.0.", `${entry.path}/video:rating`, VIDEO_SPEC);
@@ -428,7 +428,7 @@ export class ExtensionValidator {
         this.#validateRelationship(entry.platformRelationship, entry.platformValue, "platform", "GOOGLE_VIDEO_PLATFORM_RELATIONSHIP_INVALID", context, entry.path);
         if (entry.platformValue !== undefined && !isSpaceSeparatedVideoPlatformList(entry.platformValue))
             this.#add(context, "GOOGLE_VIDEO_PLATFORM_VALUE_INVALID", "video:platform must contain web, mobile, tv, or a space-delimited combination of those values.", `${entry.path}/video:platform`, VIDEO_SPEC);
-        if (entry.uploader !== undefined && entry.uploader.length > 255)
+        if (entry.uploader !== undefined && xmlCharacterLength(entry.uploader) > 255)
             this.#add(context, "GOOGLE_VIDEO_UPLOADER_TOO_LONG", "video:uploader must be no more than 255 characters.", `${entry.path}/video:uploader`, VIDEO_SPEC);
         if (entry.uploaderInfo !== undefined) {
             context.validateLoc(entry.uploaderInfo, `${entry.path}/video:uploader/@info`, { enforceSitemapLocation: false });
@@ -614,13 +614,27 @@ export function shouldCollectExtensionText(element) {
         ]).has(element.local);
     return element.uri === PAGEMAP_NS && element.local === "Attribute";
 }
+export function isElementOnlyExtensionContainer(element) {
+    if (element.uri === IMAGE_NS)
+        return element.local === "image";
+    if (element.uri === NEWS_NS)
+        return element.local === "news" || element.local === "publication";
+    if (element.uri === VIDEO_NS)
+        return element.local === "video" || element.local === "tvshow";
+    if (element.uri === PAGEMAP_NS) {
+        return element.local === "PageMap" || element.local === "Template" || element.local === "DataObject";
+    }
+    return element.uri === XHTML_NS && element.local === "link";
+}
 export function isValidCompleteW3cDateOrDateTime(value, options = {}) {
     const date = /^(\d{4})-(\d{2})-(\d{2})$/;
-    const dateTime = options.requireTimeSeconds
-        ? /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
-        : /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
-    const match = date.exec(value) ?? dateTime.exec(value);
+    const dateTime = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|([+-])(\d{2}):(\d{2}))$/;
+    const dateMatch = date.exec(value);
+    const dateTimeMatch = dateTime.exec(value);
+    const match = dateMatch ?? dateTimeMatch;
     if (!match || Number.isNaN(Date.parse(value)))
+        return false;
+    if (options.requireTimeSeconds && dateTimeMatch && dateTimeMatch[6] === undefined)
         return false;
     const year = Number(match[1]);
     const month = Number(match[2]);
@@ -628,9 +642,18 @@ export function isValidCompleteW3cDateOrDateTime(value, options = {}) {
     const hour = match[4] === undefined ? 0 : Number(match[4]);
     const minute = match[5] === undefined ? 0 : Number(match[5]);
     const second = match[6] === undefined ? 0 : Number(match[6]);
-    if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59)
+    if (year === 0 || month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59)
         return false;
+    if (dateTimeMatch && dateTimeMatch[7] !== "Z") {
+        const timezoneHour = Number(dateTimeMatch[9]);
+        const timezoneMinute = Number(dateTimeMatch[10]);
+        if (timezoneHour > 14 || timezoneMinute > 59 || (timezoneHour === 14 && timezoneMinute !== 0))
+            return false;
+    }
     return day >= 1 && day <= new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+function xmlCharacterLength(value) {
+    return Array.from(value).length;
 }
 function isValidNewsPlacement(local, parent, grandparent) {
     if (local === "news")
