@@ -2,11 +2,9 @@ import { ExtensionValidator, isElementOnlyExtensionContainer, isExtensionNamespa
 import { normalizeInput, readableForXml } from "./input.js";
 import { validateLocRule, validateSingleHostRule } from "./loc-rules.js";
 import { getRuleDefinition } from "./rules.js";
-import { createSaxesParserAdapter } from "./xml-parser.js";
+import { createSaxesParserAdapter, isSchemaUtilityAttribute } from "./xml-parser.js";
 import { DEFAULT_LIMITS } from "./types.js";
 const SITEMAP_NS = "http://www.sitemaps.org/schemas/sitemap/0.9";
-const XMLNS_NS = "http://www.w3.org/2000/xmlns/";
-const XSI_NS = "http://www.w3.org/2001/XMLSchema-instance";
 const CHANGEFREQ_VALUES = new Set(["always", "hourly", "daily", "weekly", "monthly", "yearly", "never"]);
 const URL_CORE_CHILD_ORDER = new Map([
     ["loc", 0],
@@ -434,12 +432,6 @@ function addUnexpectedAttributeDiagnostic(state, code, source, element, attribut
         message: `Attribute ${attribute.name} is not allowed on this sitemap element.`,
         location: { ...currentLocation(state, parser), path: `${element.path}/@${attribute.name}` },
     });
-}
-function isSchemaUtilityAttribute(attribute) {
-    return attribute.uri === XMLNS_NS
-        || attribute.name === "xmlns"
-        || attribute.name.startsWith("xmlns:")
-        || attribute.uri === XSI_NS;
 }
 function shouldCollectText(element) {
     if (element.uri === SITEMAP_NS) {

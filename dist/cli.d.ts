@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import "./node-input.js";
+import { CliUsageError } from "./cli-runtime.js";
 import type { CiPolicyPreset } from "./ci.js";
 import type { ReportDetailLevel } from "./report.js";
 import type { DiagnosticSeverity } from "./types.js";
@@ -35,9 +36,6 @@ interface CliArgs {
     loaderConcurrency: number;
     hreflangGraph: boolean;
 }
-export declare class CliUsageError extends Error {
-    constructor(message: string);
-}
+export { CliUsageError };
 export declare function runCli(argv?: readonly string[], io?: CliIo): Promise<number>;
 export declare function parseCliArgs(argv: readonly string[]): CliArgs;
-export {};

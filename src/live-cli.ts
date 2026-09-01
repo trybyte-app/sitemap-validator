@@ -5,11 +5,26 @@ import { once } from "node:events";
 import { createReadStream, createWriteStream } from "node:fs";
 import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { finished } from "node:stream/promises";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { ParsedRobots } from "@trybyte/robotstxt-parser";
+import {
+  CliUsageError as LiveCliUsageError,
+  isBrokenPipeError,
+  isHttpUrl,
+  parseFailOn,
+  rejectInlineValue,
+  requireChoice,
+  requireNumber,
+  requireValue,
+  resolveLocalPath,
+  runCliMain,
+  splitFlag,
+  toErrorMessage,
+  uniqueList,
+} from "./cli-runtime.js";
 import { createCiPolicyEvaluator } from "./ci-policy-evaluator.js";
 import { resolveCiPolicy } from "./ci.js";
 import { createGuardedLiveFetcher } from "./guarded-live-fetch.js";
@@ -19,7 +34,6 @@ import {
   openLiveUrlDataset,
 } from "./live-url-dataset.js";
 import { createLocalSitemapLoader } from "./loaders.js";
-import { isMainModule } from "./node-main.js";
 import { createDiagnosticSummaryBuilder } from "./report.js";
 import { validateSitemapSetEvents } from "./set.js";
 import type { CiEvaluation, CiPolicy, CiPolicyPreset } from "./ci.js";
@@ -227,13 +241,6 @@ interface DuplicateShardRecord {
   key: string;
   url: string;
   sourceSitemap: string | undefined;
-}
-
-class LiveCliUsageError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "LiveCliUsageError";
-  }
 }
 
 export async function runLiveCli(
@@ -1939,10 +1946,6 @@ const ROBOTS_DIRECTIVES_WITH_COLON_VALUES = new Set([
   "unavailable_after",
 ]);
 
-function uniqueList<T>(values: readonly T[]): T[] {
-  return [...new Set(values)];
-}
-
 async function mapConcurrent<T, R>(
   values: readonly T[],
   concurrency: number,
@@ -2083,136 +2086,6 @@ Report options:
 `);
 }
 
-function splitFlag(rawValue: string): { flag: string; inlineValue: string | undefined } {
-  const equalsIndex = rawValue.indexOf("=");
-
-  if (equalsIndex < 0) {
-    return {
-      flag: rawValue,
-      inlineValue: undefined,
-    };
-  }
-
-  return {
-    flag: rawValue.slice(0, equalsIndex),
-    inlineValue: rawValue.slice(equalsIndex + 1),
-  };
-}
-
-function rejectInlineValue(flag: string, inlineValue: string | undefined): void {
-  if (inlineValue !== undefined) {
-    throw new LiveCliUsageError(`${flag} does not accept a value.`);
-  }
-}
-
-function requireValue(
-  argv: readonly string[],
-  index: number,
-  flag: string,
-  inlineValue: string | undefined,
-): { value: string; index: number } {
-  if (inlineValue !== undefined) {
-    if (inlineValue.length === 0) {
-      throw new LiveCliUsageError(`${flag} requires a value.`);
-    }
-
-    return {
-      value: inlineValue,
-      index,
-    };
-  }
-
-  const next = argv[index + 1];
-
-  if (!next || next.startsWith("--")) {
-    throw new LiveCliUsageError(`${flag} requires a value.`);
-  }
-
-  return {
-    value: next,
-    index: index + 1,
-  };
-}
-
-function requireNumber(
-  argv: readonly string[],
-  index: number,
-  flag: string,
-  inlineValue: string | undefined,
-): { value: number; index: number } {
-  const parsed = requireValue(argv, index, flag, inlineValue);
-  const value = Number(parsed.value);
-
-  if (!Number.isFinite(value) || value < 0) {
-    throw new LiveCliUsageError(`${flag} requires a non-negative number.`);
-  }
-
-  return {
-    value: Math.floor(value),
-    index: parsed.index,
-  };
-}
-
-function requireChoice<const T extends readonly string[]>(
-  argv: readonly string[],
-  index: number,
-  flag: string,
-  choices: T,
-  inlineValue: string | undefined,
-): { value: T[number]; index: number } {
-  const parsed = requireValue(argv, index, flag, inlineValue);
-
-  if (!isChoice(parsed.value, choices)) {
-    throw new LiveCliUsageError(`${flag} must be one of: ${choices.join(", ")}.`);
-  }
-
-  return {
-    value: parsed.value,
-    index: parsed.index,
-  };
-}
-
-function isChoice<const T extends readonly string[]>(value: string, choices: T): value is T[number] {
-  return choices.includes(value);
-}
-
-function parseFailOn(value: string): readonly DiagnosticSeverity[] {
-  const normalized = value.trim().toLowerCase();
-
-  if (normalized === "none") {
-    return [];
-  }
-
-  if (normalized === "errors") {
-    return ["error"];
-  }
-
-  if (normalized === "warnings") {
-    return ["error", "warning"];
-  }
-
-  const severities = normalized.split(",")
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0);
-  const parsed: DiagnosticSeverity[] = [];
-
-  for (const severity of severities) {
-    if (severity !== "error" && severity !== "warning" && severity !== "info") {
-      throw new LiveCliUsageError("--fail-on must be none or a comma-separated list of: error, warning, info.");
-    }
-
-    if (!parsed.includes(severity)) {
-      parsed.push(severity);
-    }
-  }
-
-  if (parsed.length === 0) {
-    throw new LiveCliUsageError("--fail-on requires at least one severity or none.");
-  }
-
-  return parsed;
-}
-
 function parseList(value: string): string[] {
   const parts = value.split(",")
     .map((part) => part.trim())
@@ -2225,55 +2098,4 @@ function parseList(value: string): string[] {
   return parts;
 }
 
-function isHttpUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-function resolveLocalPath(target: string): string {
-  try {
-    const url = new URL(target);
-
-    if (url.protocol === "file:") {
-      return fileURLToPath(url);
-    }
-  } catch {
-    return resolve(target);
-  }
-
-  return resolve(target);
-}
-
-function toErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function isBrokenPipeError(error: unknown): boolean {
-  return error instanceof Error
-    && "code" in error
-    && (error as Error & { code?: unknown }).code === "EPIPE";
-}
-
-if (isMainModule(import.meta.url)) {
-  let stdoutPipeClosed = false;
-  process.stdout.on("error", (error) => {
-    if (isBrokenPipeError(error)) {
-      stdoutPipeClosed = true;
-      process.exitCode = 0;
-      return;
-    }
-
-    throw error;
-  });
-
-  runLiveCli().then((code) => {
-    process.exitCode = stdoutPipeClosed ? 0 : code;
-  }).catch((error: unknown) => {
-    console.error(error);
-    process.exitCode = 1;
-  });
-}
+runCliMain(import.meta.url, runLiveCli);

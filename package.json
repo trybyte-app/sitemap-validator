@@ -1,6 +1,6 @@
 {
   "name": "@trybyte/sitemap-validator",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Standards-focused XML sitemap validator for TypeScript, CI, and browser apps.",
   "type": "module",
   "private": false,

@@ -1,6 +1,9 @@
 import { SaxesParser } from "saxes";
 import type { SaxesAttributeNS, SaxesTagNS, XMLDecl } from "saxes";
 
+const XMLNS_NS = "http://www.w3.org/2000/xmlns/";
+const XSI_NS = "http://www.w3.org/2001/XMLSchema-instance";
+
 export interface XmlAttribute {
   name: string;
   local: string;
@@ -72,6 +75,13 @@ export function createSaxesParserAdapter(handlers: XmlParserHandlers): XmlParser
       };
     },
   };
+}
+
+export function isSchemaUtilityAttribute(attribute: XmlAttribute): boolean {
+  return attribute.uri === XMLNS_NS
+    || attribute.name === "xmlns"
+    || attribute.name.startsWith("xmlns:")
+    || attribute.uri === XSI_NS;
 }
 
 function toDeclaration(declaration: XMLDecl): XmlDeclaration {

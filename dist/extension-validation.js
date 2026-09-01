@@ -1,12 +1,11 @@
 import { isGoogleSupportedHreflangTag, isIso3166Alpha2RegionCode, isIso639Alpha2LanguageCode, isIso639Alpha3LanguageCode, isValidBcp47LanguageTag, } from "./standards.js";
+import { isSchemaUtilityAttribute } from "./xml-parser.js";
 export const IMAGE_NS = "http://www.google.com/schemas/sitemap-image/1.1";
 export const NEWS_NS = "http://www.google.com/schemas/sitemap-news/0.9";
 export const VIDEO_NS = "http://www.google.com/schemas/sitemap-video/1.1";
 export const PAGEMAP_NS = "http://www.google.com/schemas/sitemap-pagemap/1.0";
 export const XHTML_NS = "http://www.w3.org/1999/xhtml";
 const SITEMAP_NS = "http://www.sitemaps.org/schemas/sitemap/0.9";
-const XMLNS_NS = "http://www.w3.org/2000/xmlns/";
-const XSI_NS = "http://www.w3.org/2001/XMLSchema-instance";
 const IMAGE_SPEC = "https://developers.google.com/search/docs/crawling-indexing/sitemaps/image-sitemaps";
 const NEWS_SPEC = "https://developers.google.com/search/docs/crawling-indexing/sitemaps/news-sitemap";
 const VIDEO_SPEC = "https://developers.google.com/search/docs/crawling-indexing/sitemaps/video-sitemaps";
@@ -679,9 +678,6 @@ function isValidPageMapPlacement(local, parent, grandparent) {
     if (local === "Attribute")
         return parent.local === "DataObject" && grandparent?.uri === PAGEMAP_NS && grandparent.local === "PageMap";
     return parent.local === "PageMap" || parent.local === "DataObject";
-}
-function isSchemaUtilityAttribute(attribute) {
-    return attribute.uri === XMLNS_NS || attribute.name === "xmlns" || attribute.name.startsWith("xmlns:") || attribute.uri === XSI_NS;
 }
 function isAllowedVideoAttribute(element, attribute) {
     if (element === "player_loc")

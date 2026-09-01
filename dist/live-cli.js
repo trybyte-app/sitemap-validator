@@ -5,17 +5,17 @@ import { once } from "node:events";
 import { createReadStream, createWriteStream } from "node:fs";
 import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { finished } from "node:stream/promises";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { ParsedRobots } from "@trybyte/robotstxt-parser";
+import { CliUsageError as LiveCliUsageError, isBrokenPipeError, isHttpUrl, parseFailOn, rejectInlineValue, requireChoice, requireNumber, requireValue, resolveLocalPath, runCliMain, splitFlag, toErrorMessage, uniqueList, } from "./cli-runtime.js";
 import { createCiPolicyEvaluator } from "./ci-policy-evaluator.js";
 import { resolveCiPolicy } from "./ci.js";
 import { createGuardedLiveFetcher } from "./guarded-live-fetch.js";
 import { createLiveUrlDatasetCollector, LiveUrlDatasetError, openLiveUrlDataset, } from "./live-url-dataset.js";
 import { createLocalSitemapLoader } from "./loaders.js";
-import { isMainModule } from "./node-main.js";
 import { createDiagnosticSummaryBuilder } from "./report.js";
 import { validateSitemapSetEvents } from "./set.js";
 const DEFAULT_MAX_DEPTH = 10;
@@ -61,12 +61,6 @@ const USER_AGENT_PRESETS = {
     },
 };
 const USER_AGENT_PRESET_CHOICES = Object.keys(USER_AGENT_PRESETS);
-class LiveCliUsageError extends Error {
-    constructor(message) {
-        super(message);
-        this.name = "LiveCliUsageError";
-    }
-}
 export async function runLiveCli(argv = process.argv.slice(2), io = { stdout: process.stdout, stderr: process.stderr }, dependencies = {}) {
     try {
         const args = parseLiveCliArgs(argv);
@@ -1466,9 +1460,6 @@ const ROBOTS_DIRECTIVES_WITH_COLON_VALUES = new Set([
     "max-video-preview",
     "unavailable_after",
 ]);
-function uniqueList(values) {
-    return [...new Set(values)];
-}
 async function mapConcurrent(values, concurrency, mapper) {
     const results = new Array(values.length);
     let nextIndex = 0;
@@ -1599,95 +1590,6 @@ Report options:
   --help                            Show this help.
 `);
 }
-function splitFlag(rawValue) {
-    const equalsIndex = rawValue.indexOf("=");
-    if (equalsIndex < 0) {
-        return {
-            flag: rawValue,
-            inlineValue: undefined,
-        };
-    }
-    return {
-        flag: rawValue.slice(0, equalsIndex),
-        inlineValue: rawValue.slice(equalsIndex + 1),
-    };
-}
-function rejectInlineValue(flag, inlineValue) {
-    if (inlineValue !== undefined) {
-        throw new LiveCliUsageError(`${flag} does not accept a value.`);
-    }
-}
-function requireValue(argv, index, flag, inlineValue) {
-    if (inlineValue !== undefined) {
-        if (inlineValue.length === 0) {
-            throw new LiveCliUsageError(`${flag} requires a value.`);
-        }
-        return {
-            value: inlineValue,
-            index,
-        };
-    }
-    const next = argv[index + 1];
-    if (!next || next.startsWith("--")) {
-        throw new LiveCliUsageError(`${flag} requires a value.`);
-    }
-    return {
-        value: next,
-        index: index + 1,
-    };
-}
-function requireNumber(argv, index, flag, inlineValue) {
-    const parsed = requireValue(argv, index, flag, inlineValue);
-    const value = Number(parsed.value);
-    if (!Number.isFinite(value) || value < 0) {
-        throw new LiveCliUsageError(`${flag} requires a non-negative number.`);
-    }
-    return {
-        value: Math.floor(value),
-        index: parsed.index,
-    };
-}
-function requireChoice(argv, index, flag, choices, inlineValue) {
-    const parsed = requireValue(argv, index, flag, inlineValue);
-    if (!isChoice(parsed.value, choices)) {
-        throw new LiveCliUsageError(`${flag} must be one of: ${choices.join(", ")}.`);
-    }
-    return {
-        value: parsed.value,
-        index: parsed.index,
-    };
-}
-function isChoice(value, choices) {
-    return choices.includes(value);
-}
-function parseFailOn(value) {
-    const normalized = value.trim().toLowerCase();
-    if (normalized === "none") {
-        return [];
-    }
-    if (normalized === "errors") {
-        return ["error"];
-    }
-    if (normalized === "warnings") {
-        return ["error", "warning"];
-    }
-    const severities = normalized.split(",")
-        .map((part) => part.trim())
-        .filter((part) => part.length > 0);
-    const parsed = [];
-    for (const severity of severities) {
-        if (severity !== "error" && severity !== "warning" && severity !== "info") {
-            throw new LiveCliUsageError("--fail-on must be none or a comma-separated list of: error, warning, info.");
-        }
-        if (!parsed.includes(severity)) {
-            parsed.push(severity);
-        }
-    }
-    if (parsed.length === 0) {
-        throw new LiveCliUsageError("--fail-on requires at least one severity or none.");
-    }
-    return parsed;
-}
 function parseList(value) {
     const parts = value.split(",")
         .map((part) => part.trim())
@@ -1697,49 +1599,4 @@ function parseList(value) {
     }
     return parts;
 }
-function isHttpUrl(value) {
-    try {
-        const url = new URL(value);
-        return url.protocol === "http:" || url.protocol === "https:";
-    }
-    catch {
-        return false;
-    }
-}
-function resolveLocalPath(target) {
-    try {
-        const url = new URL(target);
-        if (url.protocol === "file:") {
-            return fileURLToPath(url);
-        }
-    }
-    catch {
-        return resolve(target);
-    }
-    return resolve(target);
-}
-function toErrorMessage(error) {
-    return error instanceof Error ? error.message : String(error);
-}
-function isBrokenPipeError(error) {
-    return error instanceof Error
-        && "code" in error
-        && error.code === "EPIPE";
-}
-if (isMainModule(import.meta.url)) {
-    let stdoutPipeClosed = false;
-    process.stdout.on("error", (error) => {
-        if (isBrokenPipeError(error)) {
-            stdoutPipeClosed = true;
-            process.exitCode = 0;
-            return;
-        }
-        throw error;
-    });
-    runLiveCli().then((code) => {
-        process.exitCode = stdoutPipeClosed ? 0 : code;
-    }).catch((error) => {
-        console.error(error);
-        process.exitCode = 1;
-    });
-}
+runCliMain(import.meta.url, runLiveCli);

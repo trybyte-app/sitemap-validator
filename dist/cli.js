@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 import "./node-input.js";
 import { access, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
+import { CliUsageError, isBrokenPipeError, isHttpUrl, parseFailOn, rejectInlineValue, requireChoice, requireNumber, requireValue, resolveLocalPath, runCliMain, splitFlag, toErrorMessage, uniqueList, } from "./cli-runtime.js";
 import { createCiPolicyEvaluator } from "./ci-policy-evaluator.js";
 import { resolveCiPolicy } from "./ci.js";
 import { createLocalSitemapLoader } from "./loaders.js";
 import { countDiagnostics, createDiagnosticSummaryBuilder } from "./report.js";
 import { validateSitemapSetEvents } from "./set.js";
-import { isMainModule } from "./node-main.js";
 const DEFAULT_MAX_DEPTH = 10;
 const DEFAULT_MAX_SOURCES = 10_000;
 const DEFAULT_LOADER_CONCURRENCY = 4;
@@ -18,12 +17,7 @@ const DEFAULT_MAX_EXAMPLES_PER_GROUP = 3;
 const CI_POLICY_PRESET_CHOICES = ["ciDefault", "strict", "protocolOnly", "googleCompatible"];
 const DETAIL_CHOICES = ["summary", "grouped", "full"];
 const FORMAT_CHOICES = ["text", "json"];
-export class CliUsageError extends Error {
-    constructor(message) {
-        super(message);
-        this.name = "CliUsageError";
-    }
-}
+export { CliUsageError };
 export async function runCli(argv = process.argv.slice(2), io = {
     stdout: process.stdout,
     stderr: process.stderr,
@@ -367,95 +361,6 @@ want sitemap.org host and path-prefix rules checked against the future public UR
 
 `);
 }
-function splitFlag(rawValue) {
-    const equalsIndex = rawValue.indexOf("=");
-    if (equalsIndex < 0) {
-        return {
-            flag: rawValue,
-            inlineValue: undefined,
-        };
-    }
-    return {
-        flag: rawValue.slice(0, equalsIndex),
-        inlineValue: rawValue.slice(equalsIndex + 1),
-    };
-}
-function rejectInlineValue(flag, inlineValue) {
-    if (inlineValue !== undefined) {
-        throw new CliUsageError(`${flag} does not accept a value.`);
-    }
-}
-function requireValue(argv, index, flag, inlineValue) {
-    if (inlineValue !== undefined) {
-        if (inlineValue.length === 0) {
-            throw new CliUsageError(`${flag} requires a value.`);
-        }
-        return {
-            value: inlineValue,
-            index,
-        };
-    }
-    const next = argv[index + 1];
-    if (!next || next.startsWith("--")) {
-        throw new CliUsageError(`${flag} requires a value.`);
-    }
-    return {
-        value: next,
-        index: index + 1,
-    };
-}
-function requireNumber(argv, index, flag, inlineValue) {
-    const parsed = requireValue(argv, index, flag, inlineValue);
-    const value = Number(parsed.value);
-    if (!Number.isFinite(value) || value < 0) {
-        throw new CliUsageError(`${flag} requires a non-negative number.`);
-    }
-    return {
-        value: Math.floor(value),
-        index: parsed.index,
-    };
-}
-function requireChoice(argv, index, flag, choices, inlineValue) {
-    const parsed = requireValue(argv, index, flag, inlineValue);
-    if (!isChoice(parsed.value, choices)) {
-        throw new CliUsageError(`${flag} must be one of: ${choices.join(", ")}.`);
-    }
-    return {
-        value: parsed.value,
-        index: parsed.index,
-    };
-}
-function isChoice(value, choices) {
-    return choices.includes(value);
-}
-function parseFailOn(value) {
-    const normalized = value.trim().toLowerCase();
-    if (normalized === "none") {
-        return [];
-    }
-    if (normalized === "errors") {
-        return ["error"];
-    }
-    if (normalized === "warnings") {
-        return ["error", "warning"];
-    }
-    const severities = normalized.split(",")
-        .map((part) => part.trim())
-        .filter((part) => part.length > 0);
-    const parsed = [];
-    for (const severity of severities) {
-        if (severity !== "error" && severity !== "warning" && severity !== "info") {
-            throw new CliUsageError("--fail-on must be none or a comma-separated list of: error, warning, info.");
-        }
-        if (!parsed.includes(severity)) {
-            parsed.push(severity);
-        }
-    }
-    if (parsed.length === 0) {
-        throw new CliUsageError("--fail-on requires at least one severity or none.");
-    }
-    return parsed;
-}
 function parseRuleList(value) {
     const rules = value.split(",")
         .map((part) => part.trim())
@@ -482,9 +387,6 @@ function createPolicyReport(args, policy) {
         allowRules: policy.allowRules ?? [],
         maxWarnings: policy.maxWarnings,
     };
-}
-function uniqueList(values) {
-    return [...new Set(values)];
 }
 async function resolveRootInput(target, args) {
     if (isHttpUrl(target)) {
@@ -518,27 +420,6 @@ async function resolveLocalChildLoader(args) {
         publicUrlPrefix: args.publicUrlPrefix,
         localDirectory: directory,
     });
-}
-function isHttpUrl(value) {
-    try {
-        const url = new URL(value);
-        return url.protocol === "http:" || url.protocol === "https:";
-    }
-    catch {
-        return false;
-    }
-}
-function resolveLocalPath(target) {
-    try {
-        const url = new URL(target);
-        if (url.protocol === "file:") {
-            return fileURLToPath(url);
-        }
-    }
-    catch {
-        return resolve(target);
-    }
-    return resolve(target);
 }
 function createProgressSnapshot() {
     return {
@@ -708,28 +589,4 @@ function formatDiagnosticLocation(diagnostic) {
     ].filter((part) => typeof part === "string" && part.length > 0);
     return parts.length > 0 ? ` (${parts.join(", ")})` : "";
 }
-function toErrorMessage(error) {
-    return error instanceof Error ? error.message : String(error);
-}
-function isBrokenPipeError(error) {
-    return error instanceof Error
-        && "code" in error
-        && error.code === "EPIPE";
-}
-if (isMainModule(import.meta.url)) {
-    let stdoutPipeClosed = false;
-    process.stdout.on("error", (error) => {
-        if (isBrokenPipeError(error)) {
-            stdoutPipeClosed = true;
-            process.exitCode = 0;
-            return;
-        }
-        throw error;
-    });
-    runCli().then((exitCode) => {
-        process.exitCode = stdoutPipeClosed ? 0 : exitCode;
-    }).catch((error) => {
-        process.stderr.write(`${toErrorMessage(error)}\n`);
-        process.exitCode = 1;
-    });
-}
+runCliMain(import.meta.url, runCli);

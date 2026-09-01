@@ -2,6 +2,13 @@
 
 All notable changes to this package will be documented in this file.
 
+## 1.0.4 - 2026-09-01
+
+- Consolidated shared argument parsing, path handling, CI severity parsing,
+  error reporting, and process startup behavior across both CLI entry points.
+- Centralized XML schema utility-attribute recognition without changing the
+  public library interface or command behavior.
+
 ## 1.0.3 - 2026-08-31
 
 - Fixed foreign-element placement, unexpected character data, invalid sitemap

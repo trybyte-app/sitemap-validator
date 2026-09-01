@@ -1,4 +1,6 @@
 import { SaxesParser } from "saxes";
+const XMLNS_NS = "http://www.w3.org/2000/xmlns/";
+const XSI_NS = "http://www.w3.org/2001/XMLSchema-instance";
 export function createSaxesParserAdapter(handlers) {
     const parser = new SaxesParser({
         xmlns: true,
@@ -26,6 +28,12 @@ export function createSaxesParserAdapter(handlers) {
             };
         },
     };
+}
+export function isSchemaUtilityAttribute(attribute) {
+    return attribute.uri === XMLNS_NS
+        || attribute.name === "xmlns"
+        || attribute.name.startsWith("xmlns:")
+        || attribute.uri === XSI_NS;
 }
 function toDeclaration(declaration) {
     return {

@@ -35,3 +35,4 @@ export interface XmlParserHandlers {
     onError(error: Error): void;
 }
 export declare function createSaxesParserAdapter(handlers: XmlParserHandlers): XmlParserAdapter;
+export declare function isSchemaUtilityAttribute(attribute: XmlAttribute): boolean;
