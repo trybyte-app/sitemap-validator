@@ -1,7 +1,5 @@
 # Changelog
 
-All notable changes to this package will be documented in this file.
-
 ## 1.0.4 - 2026-09-01
 
 - Consolidated shared argument parsing, path handling, CI severity parsing,
@@ -34,8 +32,8 @@ All notable changes to this package will be documented in this file.
 ## 1.0.1 - 2026-08-28
 
 - Split Google extension validation, live URL storage, guarded live fetching,
-  and CI policy evaluation into focused internal modules without changing the
-  public library API.
+  and CI policy evaluation into separate internal modules. The public library
+  API did not change.
 - Kept request timeouts active while reading live response bodies and applied
   response-size limits and cleanup through one guarded fetch path.
 - Centralized saved URL handling for plain text, JSON arrays, and JSONL records
@@ -54,5 +52,7 @@ All notable changes to this package will be documented in this file.
 - Added Google image, News, video, PageMap, and hreflang sitemap extension checks.
 - Added browser-safe entrypoint at `@trybyte/sitemap-validator/browser`.
 - Added CLI publish gate as `sitemap-validator`.
-- Added separate live wrapper as `sitemap-validator-live` for fetching published sitemaps and running opt-in URL audits.
-- Added structured diagnostics, CI policy helpers, grouped reports, progress events, and release verification scripts.
+- Added `sitemap-validator-live` to fetch published sitemaps and run opt-in URL
+  audits outside the publish gate.
+- Added structured diagnostics, CI policy helpers, grouped reports, progress
+  events, and release verification scripts.

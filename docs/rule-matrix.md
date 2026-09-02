@@ -1,6 +1,6 @@
-# Rule Matrix
+# Rule matrix
 
-Generated from `RULE_DEFINITIONS`. Run `npm run docs:rules` after changing rule codes, severities, sources, or spec links.
+This file comes from `RULE_DEFINITIONS`. Run `npm run docs:rules` after changing rule codes, severities, sources, or specification links.
 
 Total rules: 136
 

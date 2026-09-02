@@ -121,15 +121,15 @@ function resolveDeclarationSpecifier(fromFilePath, specifier) {
 async function renderSnapshot(modulePaths, entryFilePath) {
   const moduleList = modulePaths.map((filePath) => `- \`${toPosix(relative(process.cwd(), filePath))}\``);
   const lines = [
-    "# Public API Snapshot",
+    "# Public API snapshot",
     "",
-    "Generated from `dist/index.d.ts` and the declaration files it references.",
+    "This file comes from `dist/index.d.ts` and the declaration files it references.",
     "Run `npm run api:snapshot` after intentional public API changes.",
     "Run `npm run api:check` in CI before release.",
     "",
     `Entry: \`${toPosix(relative(process.cwd(), entryFilePath))}\``,
     "",
-    "## Declaration Files",
+    "## Declaration files",
     "",
     ...moduleList,
     "",

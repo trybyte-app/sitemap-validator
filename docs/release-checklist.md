@@ -1,4 +1,4 @@
-# Release Checklist
+# Release checklist
 
 Use this before publishing a package version.
 
@@ -6,7 +6,7 @@ Use this before publishing a package version.
 
 - Confirm `package.json` uses the intended scoped package name and public npm metadata.
 - Confirm `LICENSE`, `README.md`, `CHANGELOG.md`, and linked docs are included in the npm package.
-- Run `npm ci` from a clean install when practical.
+- Run `npm ci` from a clean install when registry access is available.
 - Run `npm run verify:release`.
 - Review the `npm pack --dry-run` file list printed by `npm run pack:dry-run`.
 - Confirm both package binaries run through npm-style `.bin` symlinks, not only
@@ -14,13 +14,13 @@ Use this before publishing a package version.
 - Confirm GitHub repository description, topics, and homepage are current.
 - Confirm npm authentication has publish rights for the `@trybyte` organization.
 
-## Before 1.x API Expansion
+## Before expanding the 1.x API
 
 - Revisit whether `getCiPolicyPreset()` should remain public alongside `resolveCiPolicy()`.
 - Keep `sitemap-validator-live` separate from the root library API unless live-audit types are intentionally supported as public contracts.
 - Avoid adding page-level audits to the core `sitemap-validator` command.
 
-## Hardening Backlog
+## Hardening backlog
 
 - Pin admitted DNS addresses in the live fetch transport to close the remaining
   DNS rebinding window.

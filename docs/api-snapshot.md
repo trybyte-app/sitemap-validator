@@ -1,12 +1,12 @@
-# Public API Snapshot
+# Public API snapshot
 
-Generated from `dist/index.d.ts` and the declaration files it references.
+This file comes from `dist/index.d.ts` and the declaration files it references.
 Run `npm run api:snapshot` after intentional public API changes.
 Run `npm run api:check` in CI before release.
 
 Entry: `dist/index.d.ts`
 
-## Declaration Files
+## Declaration files
 
 - `dist/index.d.ts`
 - `dist/ci.d.ts`

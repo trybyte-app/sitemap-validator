@@ -13,9 +13,9 @@ if (!out) {
 
 const rules = listRuleDefinitions().sort((left, right) => left.code.localeCompare(right.code));
 const lines = [
-  "# Rule Matrix",
+  "# Rule matrix",
   "",
-  "Generated from `RULE_DEFINITIONS`. Run `npm run docs:rules` after changing rule codes, severities, sources, or spec links.",
+  "This file comes from `RULE_DEFINITIONS`. Run `npm run docs:rules` after changing rule codes, severities, sources, or specification links.",
   "",
   `Total rules: ${rules.length}`,
   "",

@@ -1,20 +1,19 @@
-# Standards Coverage
+# Standards coverage
 
-This project validates generated XML sitemap documents against sitemaps.org,
-Google Search Central XML sitemap guidance, and Google extension schemas where
-those sources define document-level behavior.
+This project validates generated XML sitemap documents against document-level
+rules from sitemaps.org, Google Search Central, and Google extension schemas.
 
-## Covered Core Sitemap Rules
+## Covered core sitemap rules
 
 - XML well-formedness, XML 1.0, UTF-8 input, non-UTF-8 declaration diagnostics,
   and blocked DOCTYPE declarations.
 - `urlset` and `sitemapindex` roots in the sitemap namespace.
 - Required `url`, `sitemap`, and `loc` entries.
 - Sitemap XSD child order and duplicate core child elements.
-- Present optional fields must be non-empty and valid.
-- `lastmod` accepts complete W3C date (`YYYY-MM-DD`) and datetime values; reduced
-  precision values such as `YYYY` and `YYYY-MM` are rejected because sitemap
-  schemas narrow `lastmod` to `xsd:date` or `xsd:dateTime`.
+- The validator rejects optional fields that are present but empty or invalid.
+- `lastmod` accepts complete W3C date (`YYYY-MM-DD`) and datetime values. The
+  validator rejects reduced precision such as `YYYY` and `YYYY-MM` because the
+  sitemap schemas narrow `lastmod` to `xsd:date` or `xsd:dateTime`.
 - `changefreq` allowed values and `priority` numeric range.
 - `loc` minimum and maximum length.
 - URL count, sitemap index count, and uncompressed byte limits.
@@ -23,12 +22,12 @@ those sources define document-level behavior.
 - Single-host document checks even when `sitemapLocation` is not supplied.
 - Same protocol, host, and path-prefix constraints when `sitemapLocation` is
   supplied.
-- Unknown custom namespace elements are allowed under `url`; if they appear
-  before required core fields, the validator reports schema-order diagnostics.
-- Unexpected attributes on sitemap protocol elements are rejected, while namespace
-  declarations and XML Schema instance utility attributes are allowed.
+- The validator allows unknown custom namespace elements under `url`. It reports
+  a schema-order diagnostic when they precede required core fields.
+- The validator rejects unexpected attributes on sitemap protocol elements. It
+  allows namespace declarations and XML Schema instance utility attributes.
 
-## Covered Google Extension Rules
+## Covered Google extension rules
 
 - Image sitemap placement, required `image:image` and `image:loc`, image count
   limit, schema child order, duplicate child constraints, deprecated fields,
@@ -54,7 +53,7 @@ those sources define document-level behavior.
   consistency checks, and unexpected attributes.
 - Combined sitemap extensions in one URL entry.
 
-## Intentional Boundaries
+## Intentional boundaries
 
 - Plain text, RSS, and Atom sitemap formats are out of scope; this package is
   XML-first.
@@ -64,12 +63,12 @@ those sources define document-level behavior.
   content checks are out of scope.
 - Robots.txt discovery and allow/disallow comparison are out of scope.
 - Duplicate URL auditing across one or more sitemap files is out of scope.
-- Empty Google News sitemaps are treated as protocol/XSD invalid because
-  sitemaps.org requires at least one `url` entry. Google may tolerate an empty
-  News sitemap operationally, but this validator keeps the stricter document-level
-  protocol diagnostic.
+- The validator treats empty Google News sitemaps as protocol and XSD errors
+  because sitemaps.org requires at least one `url` entry. Google may tolerate an
+  empty News sitemap operationally, but this validator keeps the stricter
+  document-level protocol diagnostic.
 
-## Source References
+## Source references
 
 - [Sitemaps.org protocol](https://www.sitemaps.org/protocol.html)
 - [Sitemap 0.9 XSD](https://www.sitemaps.org/schemas/sitemap/0.9/sitemap.xsd)

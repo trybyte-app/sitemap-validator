@@ -1,29 +1,28 @@
-# Sitemap Validator Project Frame
+# Sitemap validator project frame
 
 ## Purpose
 
-This package is a TypeScript XML sitemap validator. Its job is to decide whether
-a generated XML sitemap or sitemap index is structurally valid, standards-aligned,
-and ready to publish or submit.
+This TypeScript package decides whether a generated XML sitemap or sitemap index
+meets the rules required for publication or submission.
 
 The core validator is not a sitemap generator, crawler, robots.txt checker,
 duplicate URL auditor, or page health checker.
 
-## Primary User Story
+## Primary user story
 
-A project generates sitemap XML during build or CI. Before deploy, the project
-passes that generated local file to `sitemap-validator`. If validation produces
-deployment-blocking diagnostics, CI fails and the sitemap is not published.
+A project generates sitemap XML during build or CI, then passes the local file
+to `sitemap-validator` before deployment. CI must stop when validation produces
+a blocking diagnostic.
 
-The CLI should validate generated files:
+Validate generated files with the CLI:
 
 ```bash
 sitemap-validator ./build/sitemap.xml --sitemap-location https://example.com/sitemap.xml
 ```
 
-`sitemap-validator` is the command. `--sitemap-location` is metadata for the future
-public URL and is used for sitemap.org host/path constraints. It must not make
-the CLI fetch that URL.
+`sitemap-validator` is the command. `--sitemap-location` supplies the future
+public URL for sitemap.org host and path checks. It must never make the CLI fetch
+that URL.
 
 ## Scope
 
@@ -52,7 +51,7 @@ Google-specific XML checks should run alongside sitemaps.org checks by default.
 Do not force normal users to choose between "protocol mode" and "Google mode";
 diagnostics carry source provenance.
 
-## Out Of Scope
+## Out of scope
 
 Do not add these to the core XML validator, generated-file CLI, public validation
 API, or default CI policy:
@@ -67,16 +66,15 @@ API, or default CI policy:
 - Fetching page, image, video, or live sitemap URLs from the core CLI.
 - Remote HTTP sitemap loading as a built-in publish-gate path.
 
-These are not XML sitemap validity rules.
+These checks do not determine whether the sitemap XML is valid.
 
-## Live Wrapper Scope
+## Live wrapper scope
 
-The package may expose a separate `sitemap-validator-live` wrapper for SEO
-managers, SEO strategists, site owners, and monitoring jobs that need to fetch an
-already-published sitemap first. Keep that wrapper separate from the core
-validator and do not frame it as the main CI/CD pre-deploy path.
+The package exposes `sitemap-validator-live` for SEO teams, site owners, and
+monitoring jobs that fetch an already-published sitemap. Keep this wrapper
+separate from the publish gate.
 
-The live wrapper may:
+The live wrapper can:
 
 - Fetch live sitemap XML and pass it into the normal XML validator.
 - Traverse live sitemap indexes by fetching referenced sitemap files, including
@@ -95,13 +93,13 @@ The live wrapper may:
   robots.txt matching. The `googlebot-smartphone` preset should send the full
   Googlebot Smartphone request header and use `Googlebot` for robots matching.
 
-Live wrapper rules:
+### Live wrapper rules
 
 - Every page-level or robots-level check must be opt-in.
 - Live audit findings must stay separate from XML validation diagnostics.
-- Live audit findings for URL-level checks should include source sitemap context
+- URL-level live audit findings should include source sitemap context
   when available, especially in JSON reports for sitemap index audits.
-- Live audit findings should not use the core rule registry unless the rule is
+- Keep live audit findings out of the core rule registry unless the rule is
   truly an XML sitemap validation rule.
 - Use bounded defaults for page audits, including timeouts, byte limits,
   concurrency, and URL caps.
@@ -117,18 +115,18 @@ Live wrapper rules:
 - Refuse private, loopback, link-local, reserved, and non-public live fetch
   targets by default, including redirect targets. Allow them only through an
   explicit trusted-site option such as `--allow-private-hosts`.
-- Robots checks should use `@trybyte/robotstxt-parser`.
+- Use `@trybyte/robotstxt-parser` for robots checks.
 - Document that user-agent spoofing does not satisfy sites that verify bot
   identity by source IP, reverse DNS, firewall allowlists, or bot-management
-  systems; users may need to whitelist the machine running the audit or run from
+  systems; users may need to allowlist the machine running the audit or run from
   allowed infrastructure.
 - Do not export live-audit types from the root library API unless there is a
   deliberate product decision to support them as public contracts.
 
-## Standards Sources
+## Standards sources
 
-Treat standards provenance as first-class. Diagnostics should include the source
-family and, where useful, a spec/document link.
+Preserve standards provenance on diagnostics. Include the source family and a
+specification link when one applies.
 
 Primary references:
 
@@ -151,12 +149,12 @@ Use `docs/standards-coverage.md` as the human coverage boundary and
 `docs/rule-matrix.md` as the generated implementation-backed rule list. Do not
 claim complete standards coverage just because tests pass.
 
-## API Direction
+## API direction
 
-Prefer library-first design. CLI support exists for CI, but the core package
-should remain typed, structured, and suitable for product use.
+Design the package as a library first. Keep the core API typed and usable in
+products as well as CI.
 
-Public diagnostics should include:
+Public diagnostics must include:
 
 - Stable code.
 - Severity.
@@ -167,14 +165,14 @@ Public diagnostics should include:
 - Line/column when available.
 - Relevant spec link when available.
 
-Severity meaning:
+Severity meanings:
 
 - `error`: invalid or rejected by the relevant standard/profile.
 - `warning`: valid but ignored, deprecated, unsupported, risky, or likely
   unintended.
 - `info`: valid contextual note.
 
-The API should support:
+The API must support:
 
 - Single XML sitemap validation.
 - Sitemap index validation as a set when a caller provides a loader.
@@ -190,9 +188,9 @@ The API should support:
 Do not expose public types for robots checks, duplicate URL detection, page URL
 audits, or built-in HTTP fetching.
 
-## CLI Direction
+## CLI direction
 
-The CLI is a publish gate for generated files. It should reject live `http://` or
+The CLI is a publish gate for generated files. It must reject live `http://` or
 `https://` sitemap targets and explain that users must generate the sitemap first,
 pass the local file, and supply `--sitemap-location` for future-public URL rules.
 
@@ -202,14 +200,14 @@ mapping:
 ```bash
 sitemap-validator ./build/sitemap-index.xml \
   --sitemap-location https://example.com/sitemap-index.xml \
-  --url-prefix https://example.com/ \
-  --sitemap-root ./build
+  --public-url-prefix https://example.com/ \
+  --local-sitemap-root ./build
 ```
 
 Keep CLI reports compact by default. Use grouped output unless the caller asks for
 full detail.
 
-## Large Sitemap Strategy
+## Large sitemap strategy
 
 A valid single sitemap cannot contain millions of URLs. The protocol limit is per
 file, so large sites must use sitemap indexes and many sitemap files.
@@ -231,9 +229,9 @@ Conceptual pipeline:
 input stream -> gzip guard -> XML stream parser -> sitemap events -> rule engine -> diagnostics
 ```
 
-## Parser Direction
+## Parser direction
 
-Current parser decision:
+Use this parser boundary:
 
 - `saxes` is the production parser choice.
 - Keep parser access behind `src/xml-parser.ts`.
@@ -244,7 +242,7 @@ Do not build a custom XML parser unless benchmarks prove parser throughput is th
 real bottleneck and the replacement preserves XML well-formedness, namespace
 behavior, entity safety, line/column reporting, and untrusted-input protections.
 
-## Maintenance Rules
+## Maintenance rules
 
 - When rule definitions change, run `npm run docs:rules`.
 - When public exports or types change, run `npm run api:check`; run
@@ -254,11 +252,12 @@ behavior, entity safety, line/column reporting, and untrusted-input protections.
 - Keep README examples aligned with actual exported APIs and CLI flags.
 - Remove stale docs or tests when a feature leaves scope.
 
-## Open Product Questions
+## Open product questions
 
-- How deep should Google extension validation go before it becomes speculative
-  without fetching page/media URLs?
-- Whether to add an automated XSD/schema conformance fixture suite.
-- Whether to pin full registry datasets for ISO 639-2/3, BCP 47, and related
-  code lists instead of relying on runtime/library validation where acceptable.
-- What release-hardening steps are required before the first public publish.
+- How deep can Google extension validation go without fetching page or media
+  URLs?
+- Should the project add automated XSD conformance fixtures?
+- Should the package pin full ISO 639-2/3, BCP 47, and related registries instead
+  of relying on runtime library validation?
+- Which extra release checks should become mandatory before the next public
+  release?

@@ -1,10 +1,9 @@
-# CI Recipes
+# CI recipes
 
 Run sitemap validation after your application generates sitemap XML and before
-deployment. The validator should receive generated local files, not live sitemap
-URLs.
+deployment. Pass it generated local files, not live sitemap URLs.
 
-## Minimal CLI Gate
+## Minimal CLI gate
 
 ```bash
 npm run build
@@ -23,7 +22,7 @@ npx @trybyte/sitemap-validator ./build/sitemap.xml \
   --policy strict
 ```
 
-## Sitemap Index With Generated Children
+## Sitemap index with generated children
 
 If `./build/sitemap-index.xml` references generated child files by public URL,
 map that public prefix to the generated local directory:
@@ -39,11 +38,11 @@ npx @trybyte/sitemap-validator ./build/sitemap-index.xml \
 For example, `https://example.com/products.xml` is loaded from
 `./build/products.xml`.
 
-## Live Sitemap Wrapper
+## Live sitemap wrapper
 
 Use `sitemap-validator-live` for downloaded sitemap files, already-published
-sitemaps, scheduled monitoring, post-deploy checks, or manual SEO audits. Keep
-it separate from the main pre-deploy gate.
+sitemaps, scheduled monitoring, post-deploy checks, or manual SEO audits. This
+command is separate from the publish gate.
 
 Validate a downloaded sitemap file:
 
@@ -59,7 +58,7 @@ Fetch and validate the live sitemap XML:
 npx --package @trybyte/sitemap-validator sitemap-validator-live https://example.com/sitemap.xml --detail summary
 ```
 
-Save discovered page URLs to an artifact:
+Save discovered page URLs to a file:
 
 ```bash
 npx --package @trybyte/sitemap-validator sitemap-validator-live https://example.com/sitemap.xml \
@@ -81,8 +80,8 @@ Available opt-in checks are `--check-duplicates`, `--check-robots`,
 `--check-status`, `--check-canonical`, `--require-canonical`,
 `--check-noindex`, and `--all-audits`.
 
-The Live wrapper defaults to the `googlebot-smartphone` user-agent preset. Set a
-different crawler-specific user agent when needed:
+The live wrapper uses the `googlebot-smartphone` user-agent preset by default.
+Choose another preset to test a different crawler:
 
 ```bash
 npx --package @trybyte/sitemap-validator sitemap-validator-live --urls-file reports/sitemap-urls.txt \
@@ -94,17 +93,15 @@ npx --package @trybyte/sitemap-validator sitemap-validator-live --urls-file repo
 `--user-agent` controls the request header. `--robots-user-agent` controls the
 robots.txt matching token. The default `googlebot-smartphone` preset sends the
 full Googlebot Smartphone header and uses `Googlebot` for robots.txt matching.
-Sites that verify crawler identity through source IP, reverse DNS, firewall
-allowlists, or bot-management systems may still reject requests. Whitelist the
-machine running the audit or run the job from allowed infrastructure when that
-protection is enabled.
+Request headers cannot satisfy identity checks based on source IP, reverse DNS,
+firewall allowlists, or bot-management systems. Allowlist the audit machine or
+run the job from permitted infrastructure when the site uses those checks.
 
-Live audits cap page checks at 1,000 unique URLs by default. Use
-`--max-audit-urls 0` only when the audit run is intentionally allowed to check
-every URL, or split `reports/sitemap-urls.txt` into shards and run audits in
-parallel.
+Live audits check at most 1,000 unique URLs by default. Set
+`--max-audit-urls 0` to check every URL, or split
+`reports/sitemap-urls.txt` into shards and run smaller jobs.
 
-## Shared Node Script
+## Shared Node script
 
 Use a script when you want custom policy, text/JSON reports, or integration with
 an existing build system.
@@ -116,27 +113,30 @@ import {
   createLocalSitemapLoader,
   createJsonReport,
   createTextReport,
-  validateSitemapSet,
+  validateSitemapSet
 } from "@trybyte/sitemap-validator";
 
-const result = await validateSitemapSet({
-  path: "build/sitemap-index.xml",
-  sourceId: "sitemap-index.xml",
-}, {
-  sitemapLocation: "https://example.com/sitemap-index.xml",
-  loader: createLocalSitemapLoader({
-    publicUrlPrefix: "https://example.com/",
-    localDirectory: "build",
-  }),
-  loaderConcurrency: 4,
-});
+const result = await validateSitemapSet(
+  {
+    path: "build/sitemap-index.xml",
+    sourceId: "sitemap-index.xml"
+  },
+  {
+    sitemapLocation: "https://example.com/sitemap-index.xml",
+    loader: createLocalSitemapLoader({
+      publicUrlPrefix: "https://example.com/",
+      localDirectory: "build"
+    }),
+    loaderConcurrency: 4
+  }
+);
 
 await mkdir("reports", { recursive: true });
 await writeFile("reports/sitemap-validation.txt", createTextReport(result, { detail: "grouped" }));
 await writeFile("reports/sitemap-validation.json", createJsonReport(result, { detail: "grouped" }));
 
 assertValidForCi(result, {
-  failOn: ["error"],
+  failOn: ["error"]
 });
 ```
 
@@ -170,12 +170,13 @@ jobs:
 To preserve reports:
 
 ```yaml
-      - run: node scripts/validate-sitemap.mjs
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: sitemap-validation
-          path: reports/
+steps:
+  - run: node scripts/validate-sitemap.mjs
+  - uses: actions/upload-artifact@v4
+    if: always()
+    with:
+      name: sitemap-validation
+      path: reports/
 ```
 
 ## GitLab CI
@@ -208,7 +209,7 @@ pipeline {
 }
 ```
 
-## Vercel, Netlify, And Cloudflare Pages
+## Vercel, Netlify, and Cloudflare Pages
 
 Add validation to the build command after sitemap generation:
 
@@ -222,7 +223,7 @@ Add validation to the build command after sitemap generation:
 
 When the validator exits non-zero, the deployment stops.
 
-## Jest And Vitest
+## Jest and Vitest
 
 For repositories that already use a test runner:
 
@@ -230,18 +231,21 @@ For repositories that already use a test runner:
 import { assertValidForCi, validateSitemap } from "@trybyte/sitemap-validator";
 
 test("generated sitemap is valid", async () => {
-  const result = await validateSitemap({
-    path: "build/sitemap.xml",
-    sourceId: "sitemap.xml",
-  }, {
-    sitemapLocation: "https://example.com/sitemap.xml",
-  });
+  const result = await validateSitemap(
+    {
+      path: "build/sitemap.xml",
+      sourceId: "sitemap.xml"
+    },
+    {
+      sitemapLocation: "https://example.com/sitemap.xml"
+    }
+  );
 
   assertValidForCi(result);
 });
 ```
 
-## Benchmark Gate
+## Benchmark gate
 
 Use large benchmarks as scheduled or release-blocking jobs, not every small pull
 request.
@@ -251,4 +255,4 @@ npm run fixture:large -- --urls 1000000 --urls-per-file 50000
 npm run bench:check -- --baseline benchmarks/ci-baseline.json
 ```
 
-Refresh a baseline only when intentionally updating performance expectations.
+Refresh a baseline only after approving a change to the expected performance.
