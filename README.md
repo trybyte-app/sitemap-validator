@@ -1,8 +1,8 @@
 # Sitemap Validator
 
-TypeScript XML sitemap validator for generated sitemap files. Use it before
-publishing or deploying a site to confirm the generated XML sitemap is valid,
-standards-aligned, and ready to submit.
+Validate generated XML sitemap files before you publish them. The package checks
+XML structure, sitemap protocol rules, Google sitemap extensions, and the URL
+constraints that apply at the future public location.
 
 ## Install
 
@@ -12,13 +12,13 @@ pnpm add @trybyte/sitemap-validator
 bun add @trybyte/sitemap-validator
 ```
 
-Requirements: Node.js 20 or newer for the CLI and Node file-system helpers.
-Browser apps should import from `@trybyte/sitemap-validator/browser`.
+The CLI and Node file helpers require Node.js 20 or newer. Browser apps should
+import from `@trybyte/sitemap-validator/browser`.
 
 ## Core use case
 
-Generate the sitemap with your application, write it to a local file, then run
-`sitemap-validator` against that generated file before deploy.
+Generate the sitemap, write it to a local file, and validate that file before
+deployment.
 
 ```bash
 npx @trybyte/sitemap-validator ./build/sitemap.xml \
@@ -26,11 +26,13 @@ npx @trybyte/sitemap-validator ./build/sitemap.xml \
   --detail summary
 ```
 
-The command exits with:
+The exit code tells CI what happened:
 
-- `0` when the sitemap passes the selected CI policy.
-- `1` when validation diagnostics should block deployment.
-- `2` for CLI usage problems, such as passing a live HTTP URL instead of a file.
+| Code | Meaning                                                                                     |
+| ---- | ------------------------------------------------------------------------------------------- |
+| `0`  | The sitemap passes the selected CI policy.                                                  |
+| `1`  | Validation found diagnostics that block deployment.                                         |
+| `2`  | The command is invalid, for example because the input is a live HTTP URL instead of a file. |
 
 Default CI policy fails on `error` diagnostics. To fail on warnings too:
 
@@ -42,24 +44,22 @@ npx @trybyte/sitemap-validator ./build/sitemap.xml \
 
 ## `sitemap-validator` vs `--sitemap-location`
 
-`sitemap-validator` is the CLI command and package binary. It receives the generated
-file to validate:
+`sitemap-validator` is the package binary. Pass it the generated file:
 
 ```bash
 npx @trybyte/sitemap-validator ./build/sitemap.xml
 ```
 
-`--sitemap-location` is metadata: the future public URL where that generated
-sitemap will be published. It lets the validator apply sitemap.org location
-rules, such as same host and path-prefix constraints.
+`--sitemap-location` supplies the future public URL. The validator uses it to
+check sitemap.org host and path rules.
 
 ```bash
 npx @trybyte/sitemap-validator ./build/sitemap.xml \
   --sitemap-location https://example.com/sitemap.xml
 ```
 
-The validator still reads `./build/sitemap.xml`; it does not fetch
-`https://example.com/sitemap.xml`.
+The validator still reads `./build/sitemap.xml`. It does not fetch the public
+URL.
 
 ## CI/CD workflow
 
@@ -104,8 +104,8 @@ jobs:
       - run: npx @trybyte/sitemap-validator ./build/sitemap.xml --sitemap-location https://example.com/sitemap.xml --detail summary
 ```
 
-If the generated XML is invalid, the `npx @trybyte/sitemap-validator ...` step exits non-zero
-and the deployment does not continue.
+If the generated XML fails the selected policy, the final step exits with code
+`1` and stops the job.
 
 ## Sitemap indexes
 
@@ -125,11 +125,10 @@ fetching live URLs.
 
 ## Live sitemap wrapper
 
-Use `sitemap-validator-live` when you need to fetch or audit an already-published sitemap:
-feed it a downloaded sitemap file, a live sitemap URL, or a saved URL list, then
-ask for XML validation, URL extraction, optional live audits, and JSON reports.
-It keeps live sitemap fetching and optional page audits separate from the
-generated-file validator, while reusing the same XML validation engine.
+Use `sitemap-validator-live` to inspect an already-published sitemap. It accepts
+a downloaded sitemap, a live sitemap URL, or a saved URL list. It can validate
+XML, extract URLs, run opt-in page checks, and write JSON reports. The main
+`sitemap-validator` command remains an offline deployment check.
 
 Validate a downloaded sitemap file:
 
@@ -175,25 +174,22 @@ npx --package @trybyte/sitemap-validator sitemap-validator-live https://example.
   --detail full
 ```
 
-That file is newline-delimited JSON:
+The output is newline-delimited JSON:
 
 ```json
-{"url":"https://example.com/page","sourceSitemap":"https://example.com/sitemaps/pages-1.xml.gz"}
+{ "url": "https://example.com/page", "sourceSitemap": "https://example.com/sitemaps/pages-1.xml.gz" }
 ```
 
-Live JSON reports also include `context.sourceSitemap` on URL-level findings
-when the source is known, so a warning can be traced back to the child sitemap
-that listed the URL. Plain `--save-urls` remains available for simple one-URL
-per-line workflows.
+When the source is known, live JSON reports add `context.sourceSitemap` to each
+URL-level finding. Use it to find the child sitemap that listed the URL. Use
+`--save-urls` when one URL per line is enough.
 
-The Live wrapper writes minimal progress logs to stderr while it runs, including
-root fetch, child sitemap discovery, URL collection milestones, audit start, and
-audit completion. The final text or JSON report still goes to stdout or
-`--output`. Use `--quiet` when you need to suppress progress logs.
+The live wrapper writes progress to stderr while it fetches the root sitemap,
+finds child sitemaps, collects URLs, and runs audits. The final report goes to
+stdout or the path passed to `--output`. Use `--quiet` to suppress progress.
 
-Saved URL files make live audits repeatable and are the preferred workflow for
-large sites. You can run audit checks later from the same URL list without
-refetching the sitemap XML:
+For a large site, save the URLs once and audit that file in later runs. This
+avoids fetching and parsing the sitemap set again:
 
 ```bash
 npx --package @trybyte/sitemap-validator sitemap-validator-live --urls-file sitemap-urls.txt \
@@ -219,16 +215,17 @@ npx --package @trybyte/sitemap-validator sitemap-validator-live https://example.
 
 Available live checks:
 
-- `--check-duplicates`: duplicate URLs in the collected sitemap URL list.
-- `--check-robots`: robots.txt allow/disallow audit using
-  `@trybyte/robotstxt-parser`.
-- `--check-status`: page URL HTTP status audit.
-- `--check-canonical`: canonical URL audit when a canonical is declared.
-- `--require-canonical`: also warn when canonical is missing.
-- `--check-noindex`: `X-Robots-Tag` and robots meta `noindex` audit.
-- `--all-audits`: enable duplicates, robots, status, canonical, and noindex.
+| Option                | Check                                                                    |
+| --------------------- | ------------------------------------------------------------------------ |
+| `--check-duplicates`  | Finds duplicate URLs in the collected sitemap URL list.                  |
+| `--check-robots`      | Compares URLs with robots.txt rules through `@trybyte/robotstxt-parser`. |
+| `--check-status`      | Checks page HTTP status codes.                                           |
+| `--check-canonical`   | Checks a page's declared canonical URL.                                  |
+| `--require-canonical` | Warns when a page has no canonical declaration.                          |
+| `--check-noindex`     | Checks `X-Robots-Tag` headers and robots meta tags for `noindex`.        |
+| `--all-audits`        | Runs duplicate, robots, status, canonical, and noindex checks.           |
 
-The Live wrapper defaults to the Googlebot Smartphone user-agent preset:
+The live wrapper uses the Googlebot Smartphone user-agent preset by default:
 
 ```text
 Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)
@@ -247,37 +244,33 @@ npx --package @trybyte/sitemap-validator sitemap-validator-live https://example.
 the robots.txt matching token. The `googlebot-smartphone` preset sends the full
 smartphone request header and uses `Googlebot` for robots.txt matching.
 
-These options only change request headers and robots matching. If the target site
-verifies crawler identity with source IP, reverse DNS, firewall rules, or
-bot-management tooling, the request may still be blocked or treated differently.
-In that case, run the wrapper from an allowed IP or whitelist the machine that
-will run the audit.
+These options change request headers and robots matching. They cannot satisfy
+checks based on source IP, reverse DNS, firewall rules, or bot-management
+systems. Run the wrapper from an allowed IP or allowlist the audit machine when
+the site uses those checks.
 
-By default, XML validation still fails on XML `error` diagnostics. Live audits
-fail on audit `error` findings by default; use `--audit-fail-on warning` to fail
-on warnings too, or `--audit-fail-on none` to report without failing.
+XML `error` diagnostics fail validation. Audit `error` findings also fail the
+live command. Use `--audit-fail-on warning` to fail on warnings, or
+`--audit-fail-on none` to report findings without failing.
 
 Live page audits can be expensive on large sites. The wrapper audits at most
 1,000 unique URLs by default. Use `--max-audit-urls 0` to audit every collected
 URL entry, or keep the saved URL file and run smaller batches from it.
 
-For very large sitemap sets, such as 20 million URLs, use `--save-urls` or
-`--save-url-details`. The wrapper streams discovered URLs to disk instead of
-holding them all in memory. Duplicate auditing is exact and disk-sharded, so it
-can run across large saved URL lists without building one huge in-memory map.
-Live finding rows are capped with `--max-audit-findings` so a broken site does
-not create an enormous report.
+For a sitemap set with millions of URLs, use `--save-urls` or
+`--save-url-details`. The wrapper streams URLs to disk. Its duplicate check uses
+disk shards instead of keeping the full URL set in memory. Set
+`--max-audit-findings` to limit the number of finding rows stored in the report.
 
-By default, the Live wrapper refuses to fetch private, loopback, link-local, and
-reserved hosts, and it applies that check to followed redirects. Use
+The live wrapper refuses private, loopback, link-local, and reserved hosts by
+default. It checks redirect targets too. Use
 `--allow-private-hosts` only when you intentionally audit a trusted staging or
 internal site.
 
-The wrapper checks DNS results before each request, but the default fetch
-transport does not pin the connection to the checked address. A hostile DNS
-server could change its answer between those two operations. Treat the live
-wrapper as an audit tool, not a network isolation boundary, when checking
-untrusted domains.
+The wrapper checks DNS before each request, but its fetch transport does not pin
+the connection to the checked IP address. A DNS server could return a different
+address when the connection opens. Do not treat the wrapper as a network
+isolation tool for untrusted domains.
 
 Every live request has a 15-second timeout by default. The timeout stays active
 while the wrapper reads the response body. Sitemap responses are capped at 60
@@ -292,12 +285,15 @@ Validate one sitemap document:
 ```ts
 import { assertValidForCi, validateSitemap } from "@trybyte/sitemap-validator";
 
-const result = await validateSitemap({
-  path: "build/sitemap.xml",
-  sourceId: "sitemap.xml",
-}, {
-  sitemapLocation: "https://example.com/sitemap.xml",
-});
+const result = await validateSitemap(
+  {
+    path: "build/sitemap.xml",
+    sourceId: "sitemap.xml"
+  },
+  {
+    sitemapLocation: "https://example.com/sitemap.xml"
+  }
+);
 
 assertValidForCi(result);
 ```
@@ -305,32 +301,31 @@ assertValidForCi(result);
 Validate a sitemap index and generated child files:
 
 ```ts
-import {
-  assertValidForCi,
-  createLocalSitemapLoader,
-  validateSitemapSet,
-} from "@trybyte/sitemap-validator";
+import { assertValidForCi, createLocalSitemapLoader, validateSitemapSet } from "@trybyte/sitemap-validator";
 
-const result = await validateSitemapSet({
-  path: "build/sitemap-index.xml",
-  sourceId: "sitemap-index.xml",
-}, {
-  sitemapLocation: "https://example.com/sitemap-index.xml",
-  loader: createLocalSitemapLoader({
-    publicUrlPrefix: "https://example.com/",
-    localDirectory: "build",
-  }),
-  loaderConcurrency: 4,
-});
+const result = await validateSitemapSet(
+  {
+    path: "build/sitemap-index.xml",
+    sourceId: "sitemap-index.xml"
+  },
+  {
+    sitemapLocation: "https://example.com/sitemap-index.xml",
+    loader: createLocalSitemapLoader({
+      publicUrlPrefix: "https://example.com/",
+      localDirectory: "build"
+    }),
+    loaderConcurrency: 4
+  }
+);
 
 assertValidForCi(result, "ciDefault");
 ```
 
 ## Browser and Vite apps
 
-For an online validator, import the browser entry. It accepts uploaded XML as a
-string, `Uint8Array`, `ArrayBuffer`, or chunk iterable and does not expose the
-Node file-system loader or CLIs:
+For an online validator, import the browser entry. It accepts XML as a string,
+`Uint8Array`, `ArrayBuffer`, or chunk iterable. It does not include the Node file
+loader or either CLI:
 
 ```ts
 import { validateSitemap } from "@trybyte/sitemap-validator/browser";
@@ -342,7 +337,7 @@ if (!(file instanceof File)) {
 
 const result = await validateSitemap(await file.text(), {
   sourceId: file.name,
-  sitemapLocation: "https://example.com/sitemap.xml",
+  sitemapLocation: "https://example.com/sitemap.xml"
 });
 
 if (!result.valid) {
@@ -354,8 +349,8 @@ For a browser-side sitemap index, provide child XML with
 `createMemorySitemapLoader()` after the user uploads those files. The browser
 entry validates XML; it does not fetch live URLs or read local paths.
 
-For large files, consume events and build compact summaries without retaining
-every diagnostic row:
+For large files, consume events and build a summary without retaining every
+diagnostic row:
 
 ```ts
 import { createDiagnosticSummaryBuilder, validateSitemapSetEvents } from "@trybyte/sitemap-validator";
@@ -383,7 +378,7 @@ returned child input object.
 
 ## Validation scope
 
-Included:
+The core validator checks:
 
 - XML well-formedness, XML namespace handling, UTF-8 expectations, and safe XML
   parsing.
@@ -399,7 +394,7 @@ Included:
 - Optional set-level hreflang graph checks with `--hreflang-graph`.
 - Structured diagnostics, grouped reports, progress events, and CI policy helpers.
 
-Not included in the core XML validator:
+The core validator does not check:
 
 - HTTP status code checks for listed URLs.
 - Redirect, canonical, `noindex`, rendered metadata, or page content checks.
@@ -407,12 +402,11 @@ Not included in the core XML validator:
 - Duplicate URL auditing across sitemap files.
 - Fetching page, image, video, or live sitemap URLs from the core CLI.
 
-Those are separate audit concerns. In this package, they live only in the
-`sitemap-validator-live` wrapper and only run when the user opts in.
+The `sitemap-validator-live` wrapper provides these checks as opt-in audits.
 
 ## Standards sources
 
-Diagnostics include rule provenance. The main sources are:
+Each diagnostic identifies its rule source. The validator draws from:
 
 - [sitemaps.org protocol](https://www.sitemaps.org/protocol.html), including the
   sitemap and sitemap index XML schema rules.
@@ -436,7 +430,7 @@ boundary and [docs/rule-matrix.md](docs/rule-matrix.md) for generated rule codes
 
 ## Reports
 
-Text reports are grouped by default:
+Text reports group repeated diagnostics by default:
 
 ```bash
 npx @trybyte/sitemap-validator ./build/sitemap.xml --detail grouped
